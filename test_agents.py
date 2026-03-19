@@ -9,15 +9,24 @@ import json
 import asyncio
 import os
 import sys
+import time
 
 # Add simulation directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "simulation"))
 from sim import load_state, save_state, SimState
+from resource_optimizer import calculate_optimal_watering, calculate_optimal_rationing, calculate_harvest_priority
 
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
 
 MCP_URL = "https://kb-start-hack-gateway-buyjtibfpg.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
-MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+# Use Claude Haiku - 3x faster and 10x cheaper than Sonnet
+MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"  # Fast model for real-time decisions
+# MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"  # Slower but smarter - use for complex planning
+
+# AI Configuration
+AI_ENABLED = True  # Set to False to run pure rule-based (fastest)
+AI_CONSULTATION_INTERVAL = 20  # Only consult AI every N days (not every day)
+AI_CRISIS_ONLY = True  # Only use AI during crisis mode
 
 
 # ── Simulation Integration Functions ──────────────────────────────────────────
@@ -27,7 +36,10 @@ def get_simulation_state() -> dict:
     state = load_state()
     
     astronauts_summary = []
+    total_emergency_rations = 0
     for a in state.astronauts:
+        if a.isAlive:
+            total_emergency_rations += a.storedFoodCalories
         astronauts_summary.append({
             "name": a.name,
             "alive": a.isAlive,
@@ -38,12 +50,15 @@ def get_simulation_state() -> dict:
             "micronutrient_score": round(a.micronutrientScore, 2),
             "calorie_deficit_days": round(a.calorieDeficitAccumulated / a.dailyCalorieNeed, 1),
             "emergency_food_days": round(a.storedFoodCalories / a.dailyCalorieNeed, 1),
+            "emergency_food_kcal": round(a.storedFoodCalories, 0),
         })
 
     plants_summary = []
     for p in state.plants:
         plants_summary.append({
             "name": p.name,
+            "count": p.count,
+            "area_m2": p.area_m2,
             "stage": p.get_growth_stage(),
             "hydration": round(p.hydration, 1),
             "days_planted": p.days_planted,
@@ -52,6 +67,9 @@ def get_simulation_state() -> dict:
             "expected_yield_kg": round(p.harvest_kg(), 2) if p.is_harvestable() else 0,
         })
 
+    greenhouse_kcal = round(state.inventory.total_kcal(), 0)
+    total_food_kcal = greenhouse_kcal + total_emergency_rations
+    
     inventory_summary = {
         "Potato": round(state.inventory.Potato, 2),
         "Lettuce": round(state.inventory.Lettuce, 2),
@@ -59,7 +77,9 @@ def get_simulation_state() -> dict:
         "Beans": round(state.inventory.Beans, 2),
         "Herbs": round(state.inventory.Herbs, 2),
         "total_kg": round(state.inventory.total_kg(), 2),
-        "total_kcal": round(state.inventory.total_kcal(), 0),
+        "greenhouse_kcal": greenhouse_kcal,
+        "emergency_rations_kcal": round(total_emergency_rations, 0),
+        "total_kcal": total_food_kcal,
     }
 
     return {
@@ -75,7 +95,7 @@ def get_simulation_state() -> dict:
     }
 
 
-def execute_action(action: str, target: str = None) -> dict:
+def execute_action(action: str, target: str = None, amount: float = None) -> dict:
     """Execute an action on the simulation based on agent decision."""
     state = load_state()
     
@@ -93,23 +113,51 @@ def execute_action(action: str, target: str = None) -> dict:
     elif action == "water":
         for plant in state.plants:
             if plant.name == target:
-                water_needed = plant.count * 0.5
-                if state.resources.water_liters >= water_needed:
-                    state.resources.water_liters -= water_needed
-                    plant.hydration = min(100.0, plant.hydration + 10.0)
+                water_amount = amount if amount else plant.count * 0.5
+                if state.resources.water_liters >= water_amount:
+                    state.resources.water_liters -= water_amount
+                    # Calculate hydration increase based on water amount
+                    # Base: 0.5L per plant gives +20% hydration
+                    hydration_increase = (water_amount / (plant.count * 0.5)) * 20.0
+                    plant.hydration = min(100.0, plant.hydration + hydration_increase)
                     save_state(state)
-                    return {"success": True, "message": f"Watered {target}"}
+                    return {"success": True, "message": f"Watered {target} with {water_amount:.1f}L (+{hydration_increase:.0f}%)"}
                 return {"success": False, "message": "Not enough water"}
         return {"success": False, "message": f"Plant {target} not found"}
     
     elif action == "water_all":
+        total_water_used = 0
         for plant in state.plants:
-            water_needed = plant.count * 0.5
-            if state.resources.water_liters >= water_needed:
-                state.resources.water_liters -= water_needed
-                plant.hydration = min(100.0, plant.hydration + 10.0)
+            water_amount = amount if amount else plant.count * 0.5
+            if state.resources.water_liters >= water_amount:
+                state.resources.water_liters -= water_amount
+                total_water_used += water_amount
+                hydration_increase = (water_amount / (plant.count * 0.5)) * 20.0
+                plant.hydration = min(100.0, plant.hydration + hydration_increase)
         save_state(state)
-        return {"success": True, "message": "Watered all plants"}
+        return {"success": True, "message": f"Watered all plants ({total_water_used:.1f}L used)"}
+    
+    elif action == "smart_water":
+        # Use the optimization algorithm
+        sim_state = get_simulation_state()
+        watering_plans = calculate_optimal_watering(
+            sim_state['plants'],
+            state.resources.water_liters,
+            days_to_next_resupply=30
+        )
+        
+        actions_taken = []
+        for plan in watering_plans:
+            for plant in state.plants:
+                if plant.name == plan.plant_name:
+                    if state.resources.water_liters >= plan.water_amount_liters:
+                        state.resources.water_liters -= plan.water_amount_liters
+                        hydration_increase = (plan.water_amount_liters / (plant.count * 0.5)) * 20.0
+                        plant.hydration = min(100.0, plant.hydration + hydration_increase)
+                        actions_taken.append(f"{plan.plant_name}: {plan.water_amount_liters:.1f}L ({plan.reason})")
+        
+        save_state(state)
+        return {"success": True, "message": f"Smart watering: {'; '.join(actions_taken)}"}
     
     else:
         return {"success": False, "message": f"Unknown action: {action}"}
@@ -119,6 +167,7 @@ def analyze_critical_issues() -> list:
     """Analyze simulation state and identify critical issues requiring agent intervention."""
     state = load_state()
     issues = []
+    crisis_level = "normal"  # normal, warning, critical
     
     # Check astronaut health
     for a in state.astronauts:
@@ -126,17 +175,25 @@ def analyze_critical_issues() -> list:
             continue
         if a.hydrationLevel < 0.3:
             issues.append(f"CRITICAL: {a.name} hydration at {a.hydrationLevel*100:.0f}%")
+            crisis_level = "critical"
         if a.cognitivePerformance < 0.5:
             issues.append(f"WARNING: {a.name} cognitive performance at {a.cognitivePerformance*100:.0f}%")
+            if crisis_level == "normal":
+                crisis_level = "warning"
         if a.calorieDeficitAccumulated / a.dailyCalorieNeed > 10:
             issues.append(f"WARNING: {a.name} has {a.calorieDeficitAccumulated/a.dailyCalorieNeed:.1f} days calorie deficit")
+            if crisis_level == "normal":
+                crisis_level = "warning"
         if a.micronutrientScore < 0.6:
             issues.append(f"WARNING: {a.name} micronutrient score at {a.micronutrientScore*100:.0f}%")
+            if crisis_level == "normal":
+                crisis_level = "warning"
     
     # Check plant health
     for p in state.plants:
         if p.hydration < 20:
             issues.append(f"CRITICAL: {p.name} wilting (hydration {p.hydration:.0f}%)")
+            crisis_level = "critical"
         elif p.hydration < 40:
             issues.append(f"WARNING: {p.name} low hydration ({p.hydration:.0f}%)")
         if p.is_harvestable():
@@ -145,20 +202,26 @@ def analyze_critical_issues() -> list:
     # Check food supply
     alive_count = sum(1 for a in state.astronauts if a.isAlive)
     if alive_count > 0:
-        total_kcal = state.inventory.total_kcal()
+        greenhouse_kcal = state.inventory.total_kcal()
+        emergency_kcal = sum(a.storedFoodCalories for a in state.astronauts if a.isAlive)
+        total_kcal = greenhouse_kcal + emergency_kcal
         days_left = total_kcal / (3000 * alive_count)
         if days_left < 5:
             issues.append(f"CRITICAL: Only {days_left:.1f} days of food remaining")
+            crisis_level = "critical"
         elif days_left < 15:
             issues.append(f"WARNING: {days_left:.1f} days of food remaining")
+            if crisis_level == "normal":
+                crisis_level = "warning"
     
     # Check water
     if state.resources.water_liters < 50:
         issues.append(f"CRITICAL: Water supply at {state.resources.water_liters:.0f}L")
+        crisis_level = "critical"
     elif state.resources.water_liters < 200:
         issues.append(f"WARNING: Water supply at {state.resources.water_liters:.0f}L")
     
-    return issues
+    return issues, crisis_level
 
 
 # ── 1. Swarm Multi-Agent System ───────────────────────────────────────────────
@@ -388,7 +451,12 @@ def run_autonomous_survival_management(check_interval_days: int = 1, max_days: i
         last_check_day = 0
         
         while True:
-            state = load_state()
+            try:
+                state = load_state()
+            except (json.JSONDecodeError, FileNotFoundError):
+                # State file is being written or doesn't exist yet
+                time.sleep(0.2)
+                continue
             
             # Check if simulation has ended
             if state.day >= max_days:
@@ -400,72 +468,81 @@ def run_autonomous_survival_management(check_interval_days: int = 1, max_days: i
                 print("\n=== MISSION FAILED: All astronauts deceased ===")
                 break
             
-            # Only check at intervals
-            if state.day < last_check_day + check_interval_days:
-                time.sleep(1)
+            # Check every day (removed the interval check that was causing gaps)
+            if state.day <= last_check_day:
+                time.sleep(0.5)
                 continue
             
             last_check_day = state.day
             
-            print(f"\n--- Day {state.day} Check ---")
-            
             # Get current state and issues
             sim_state = get_simulation_state()
-            issues = analyze_critical_issues()
+            issues, crisis_level = analyze_critical_issues()
+            
+            print(f"\n--- Day {state.day} Check ---")
+            print(f"Crew: {alive_count}/4 | Food: {sim_state['inventory']['total_kcal']:.0f} kcal | Water: {sim_state['resources']['water_liters']:.0f}L")
             
             if not issues:
                 print("✓ All systems nominal")
+                # Still water plants to maintain health
+                result = execute_action("water_all")
+                print(f"  {result['message']}")
                 continue
             
-            print(f"Found {len(issues)} issue(s):")
-            for issue in issues:
+            print(f"Found {len(issues)} issue(s) | Crisis Level: {crisis_level.upper()}")
+            for issue in issues[:5]:  # Show first 5 issues
                 print(f"  • {issue}")
             
-            # Build prompt for agents
-            prompt = f"""Day {state.day} Status Report:
-
-Astronauts: {alive_count}/4 alive
-Food Supply: {sim_state['inventory']['total_kcal']:.0f} kcal ({sim_state['inventory']['total_kg']:.1f} kg)
-Water: {sim_state['resources']['water_liters']:.0f} L
-
-Critical Issues:
-{chr(10).join(f"- {issue}" for issue in issues)}
-
-Detailed State:
-{json.dumps(sim_state, indent=2)}
-
-What actions should we take immediately to ensure crew survival? Be specific about which plants to water or harvest."""
-
-            # Get agent recommendations
-            print("\nConsulting agents...")
-            result = swarm(prompt)
+            # Execute autonomous rule-based actions
+            actions_taken = []
             
-            print(f"\nAgent Response ({result.status}):")
-            print(result.results)
+            # Rule 1: Use SMART WATERING algorithm
+            result = execute_action("smart_water")
+            if result["success"]:
+                actions_taken.append(f"💧 {result['message']}")
             
-            # Parse and execute recommended actions
-            response_text = str(result.results).lower()
+            # Rule 2: Auto-harvest using priority algorithm
+            sim_state = get_simulation_state()
+            food_shortage = 1.0 - min(1.0, sim_state['inventory']['total_kcal'] / (12000 * 7))  # 7 days buffer
+            harvest_priorities = calculate_harvest_priority(sim_state['plants'], food_shortage)
             
-            # Auto-execute critical actions
-            if "harvest" in response_text:
-                for plant_name in ["Potato", "Lettuce", "Radish", "Beans", "Herbs"]:
-                    if plant_name.lower() in response_text:
-                        result = execute_action("harvest", plant_name)
-                        if result["success"]:
-                            print(f"✓ {result['message']}")
+            for plant_name, priority, reason in harvest_priorities:
+                if priority == 1:  # Urgent harvest
+                    result = execute_action("harvest", plant_name)
+                    if result["success"]:
+                        actions_taken.append(f"🌾 {result['message']} - {reason}")
             
-            if "water" in response_text:
-                if "all" in response_text:
-                    result = execute_action("water_all")
-                    print(f"✓ {result['message']}")
-                else:
-                    for plant_name in ["Potato", "Lettuce", "Radish", "Beans", "Herbs"]:
-                        if plant_name.lower() in response_text:
-                            result = execute_action("water", plant_name)
-                            if result["success"]:
-                                print(f"✓ {result['message']}")
+            if actions_taken:
+                print("\n🤖 Autonomous actions:")
+                for action in actions_taken:
+                    print(f"  {action}")
             
-            time.sleep(2)
+            # AI CONSULTATION - Optimized for speed
+            if AI_ENABLED and crisis_level == "critical":
+                # Only consult AI during critical situations and at intervals
+                if state.day % AI_CONSULTATION_INTERVAL == 0:
+                    print("\n🚨 CRISIS - Consulting AI (brief)...")
+                    
+                    # Ultra-short prompt for speed
+                    crisis_prompt = f"""Day {state.day}: {alive_count}/4 alive, {sim_state['inventory']['total_kcal']:.0f} kcal, {sim_state['resources']['water_liters']:.0f}L water. Critical: {issues[0] if issues else 'unknown'}. One sentence advice."""
+
+                    try:
+                        result = swarm(crisis_prompt)
+                        response_text = str(result.results).strip().split('.')[0] + '.'
+                        print(f"🧠 {response_text[:150]}")
+                    except Exception as e:
+                        print(f"⚠️  AI unavailable")
+            
+            elif AI_ENABLED and not AI_CRISIS_ONLY and crisis_level == "warning":
+                # Optional: Brief check for warnings
+                if state.day % (AI_CONSULTATION_INTERVAL * 2) == 0:
+                    print(f"⚠️  AI: Monitoring {len(issues)} warnings")
+            
+            elif state.day % 20 == 0:
+                # Status update without AI
+                print(f"✅ Day {state.day}: All systems managed by algorithms")
+            
+            time.sleep(0.3)  # Reduced delay for faster response
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

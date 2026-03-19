@@ -50,8 +50,10 @@ class Astronaut:
     boneHealthScore: float       = 1.0
     immuneScore: float           = 1.0
     isAlive: bool = True
-    storedFoodCalories: float  = 90000.0
-    storedFoodProteinG: float  = 3375.0
+    # Starting rations: 60 days supply (enough to reach first harvest + safety buffer)
+    # 60 days × 3000 kcal/day = 180,000 kcal per astronaut
+    storedFoodCalories: float  = 180000.0
+    storedFoodProteinG: float  = 6750.0  # 60 days × 112.5g/day
 
     def tick(self, kcal_consumed: float, protein_consumed_g: float,
              water_consumed_l: float, vit_a: float, vit_c: float,
@@ -283,6 +285,7 @@ def run(days: int = 450, tick_delay: float = 3.0):
     write_control(paused=False)
     state = load_state()
     print(f"Starting from day {state.day}")
+    print("TIP: Increase tick_delay for slower simulation (e.g., tick_delay=10.0)")
     while state.day < days:
         ctrl = read_control()
         if ctrl.get("reset"):
@@ -297,10 +300,17 @@ def run(days: int = 450, tick_delay: float = 3.0):
         state.tick()
         save_state(state)
         alive = sum(1 for a in state.astronauts if a.isAlive)
-        print(f"Day {state.day} | Alive: {alive}/4 | Food: {state.inventory.total_kcal():.0f} kcal")
+        total_emergency_rations = sum(a.storedFoodCalories for a in state.astronauts if a.isAlive)
+        greenhouse_food = state.inventory.total_kcal()
+        total_food = total_emergency_rations + greenhouse_food
+        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f})")
         time.sleep(tick_delay)
     print("Simulation complete.")
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    # Allow custom tick delay from command line
+    # Usage: python sim.py 10.0
+    tick_delay = float(sys.argv[1]) if len(sys.argv) > 1 else 3.0
+    run(tick_delay=tick_delay)
