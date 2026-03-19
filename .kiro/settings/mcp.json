@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "mars-crop-knowledge-base": {
-      "type": "sse",
+      "type": "http",
       "url": "https://kb-start-hack-gateway-buyjtibfpg.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp",
       "disabled": false,
-      "autoApprove": []
+      "autoApprove": ["*"]
     }
   }
 }
