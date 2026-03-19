@@ -39,8 +39,8 @@ def calculate_optimal_watering(plants: list, available_water: float, days_to_nex
     plans = []
     
     for plant in plants:
-        # Base water need: 0.5L per plant count per watering
-        base_water = plant['count'] * 0.5
+        # Base water need: 0.5L per m² per day
+        base_water = plant['area_m2'] * 0.5
         
         # Calculate priority based on multiple factors
         hydration = plant['hydration']

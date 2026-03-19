@@ -56,8 +56,8 @@ def get_simulation_state() -> dict:
     plants_summary = []
     for p in state.plants:
         plants_summary.append({
+            "plant_id": p.plant_id,
             "name": p.name,
-            "count": p.count,
             "area_m2": p.area_m2,
             "stage": p.get_growth_stage(),
             "hydration": round(p.hydration, 1),
@@ -90,77 +90,128 @@ def get_simulation_state() -> dict:
         "resources": {
             "water_liters": round(state.resources.water_liters, 1),
             "growing_area_m2": round(state.resources.growing_area_m2, 1),
+            "growing_area_used": round(sum(p.area_m2 for p in state.plants), 1),
+            "growing_area_available": round(state.resources.available_growing_area(state.plants), 1),
             "energy_kwh": round(state.resources.energy_kwh, 1),
         }
     }
 
 
-def execute_action(action: str, target: str = None, amount: float = None) -> dict:
+def execute_action(action: str, target: str = None, amount: float = None, **kwargs) -> dict:
     """Execute an action on the simulation based on agent decision."""
-    state = load_state()
+    from sim import read_control, write_control
     
-    if action == "harvest":
-        for plant in state.plants:
-            if plant.name == target and plant.is_harvestable():
-                kg = plant.harvest_kg()
-                current = getattr(state.inventory, plant.name, 0.0)
-                setattr(state.inventory, plant.name, round(current + kg, 3))
-                plant.days_planted = 0
-                save_state(state)
-                return {"success": True, "message": f"Harvested {kg:.2f} kg of {target}"}
-        return {"success": False, "message": f"{target} not ready for harvest"}
+    # Pause simulation to prevent race conditions
+    ctrl = read_control()
+    was_paused = ctrl.get("paused", False)
+    if not was_paused:
+        write_control(paused=True)
+        time.sleep(0.2)  # Wait for simulation to pause
     
-    elif action == "water":
-        for plant in state.plants:
-            if plant.name == target:
-                water_amount = amount if amount else plant.count * 0.5
+    try:
+        state = load_state()
+        result = None
+        
+        if action == "plant":
+            # Plant a new crop - only allow if there's available space
+            crop_name = target
+            area = amount if amount else 5.0  # Default 5m²
+            
+            # Check if there's enough space
+            available = state.resources.available_growing_area(state.plants)
+            if area > available:
+                result = {"success": False, "message": f"Not enough space. Available: {available:.1f}m², Requested: {area:.1f}m²"}
+            else:
+                result = state.plant_crop(crop_name, area)
+                if result["success"]:
+                    save_state(state)
+                    time.sleep(0.1)  # Ensure write completes
+                    print(f"    DEBUG: Planted {crop_name}, total plants now: {len(state.plants)}")
+        
+        elif action == "remove_plant":
+            # DISABLED: Plants cannot be removed once planted
+            result = {"success": False, "message": "Cannot remove plants - they are permanent once planted"}
+        
+        elif action == "harvest":
+            for plant in state.plants:
+                if plant.name == target and plant.is_harvestable():
+                    kg = plant.harvest_kg()
+                    current = getattr(state.inventory, plant.name, 0.0)
+                    setattr(state.inventory, plant.name, round(current + kg, 3))
+                    # Reset plant to start new growth cycle (plants are permanent)
+                    plant.days_planted = 0
+                    plant.hydration = 100.0  # Reset hydration after harvest
+                    save_state(state)
+                    result = {"success": True, "message": f"Harvested {kg:.2f} kg of {target}, plant will regrow"}
+                    break
+            if result is None:
+                result = {"success": False, "message": f"{target} not ready for harvest"}
+        
+        elif action == "water":
+            for plant in state.plants:
+                if plant.name == target or plant.plant_id == target:
+                    water_amount = amount if amount else plant.water_needed_per_day()
+                    if state.resources.water_liters >= water_amount:
+                        state.resources.water_liters -= water_amount
+                        # Calculate hydration increase based on water amount
+                        # Base: daily need gives +20% hydration
+                        hydration_increase = (water_amount / plant.water_needed_per_day()) * 20.0
+                        plant.hydration = min(100.0, plant.hydration + hydration_increase)
+                        save_state(state)
+                        result = {"success": True, "message": f"Watered {plant.name} with {water_amount:.1f}L (+{hydration_increase:.0f}%)"}
+                        break
+                    result = {"success": False, "message": "Not enough water"}
+                    break
+            if result is None:
+                result = {"success": False, "message": f"Plant {target} not found"}
+        
+        elif action == "water_all":
+            total_water_used = 0
+            for plant in state.plants:
+                water_amount = amount if amount else plant.water_needed_per_day()
                 if state.resources.water_liters >= water_amount:
                     state.resources.water_liters -= water_amount
-                    # Calculate hydration increase based on water amount
-                    # Base: 0.5L per plant gives +20% hydration
-                    hydration_increase = (water_amount / (plant.count * 0.5)) * 20.0
+                    total_water_used += water_amount
+                    hydration_increase = (water_amount / plant.water_needed_per_day()) * 20.0
                     plant.hydration = min(100.0, plant.hydration + hydration_increase)
-                    save_state(state)
-                    return {"success": True, "message": f"Watered {target} with {water_amount:.1f}L (+{hydration_increase:.0f}%)"}
-                return {"success": False, "message": "Not enough water"}
-        return {"success": False, "message": f"Plant {target} not found"}
-    
-    elif action == "water_all":
-        total_water_used = 0
-        for plant in state.plants:
-            water_amount = amount if amount else plant.count * 0.5
-            if state.resources.water_liters >= water_amount:
-                state.resources.water_liters -= water_amount
-                total_water_used += water_amount
-                hydration_increase = (water_amount / (plant.count * 0.5)) * 20.0
-                plant.hydration = min(100.0, plant.hydration + hydration_increase)
-        save_state(state)
-        return {"success": True, "message": f"Watered all plants ({total_water_used:.1f}L used)"}
-    
-    elif action == "smart_water":
-        # Use the optimization algorithm
-        sim_state = get_simulation_state()
-        watering_plans = calculate_optimal_watering(
-            sim_state['plants'],
-            state.resources.water_liters,
-            days_to_next_resupply=30
-        )
+            save_state(state)
+            result = {"success": True, "message": f"Watered all plants ({total_water_used:.1f}L used)"}
         
-        actions_taken = []
-        for plan in watering_plans:
-            for plant in state.plants:
-                if plant.name == plan.plant_name:
-                    if state.resources.water_liters >= plan.water_amount_liters:
-                        state.resources.water_liters -= plan.water_amount_liters
-                        hydration_increase = (plan.water_amount_liters / (plant.count * 0.5)) * 20.0
-                        plant.hydration = min(100.0, plant.hydration + hydration_increase)
-                        actions_taken.append(f"{plan.plant_name}: {plan.water_amount_liters:.1f}L ({plan.reason})")
+        elif action == "smart_water":
+            # Use the optimization algorithm
+            sim_state = get_simulation_state()
+            if not sim_state['plants']:
+                result = {"success": True, "message": "No plants to water"}
+            else:
+                watering_plans = calculate_optimal_watering(
+                    sim_state['plants'],
+                    state.resources.water_liters,
+                    days_to_next_resupply=30
+                )
+                
+                actions_taken = []
+                for plan in watering_plans:
+                    for plant in state.plants:
+                        if plant.name == plan.plant_name:
+                            if state.resources.water_liters >= plan.water_amount_liters:
+                                state.resources.water_liters -= plan.water_amount_liters
+                                hydration_increase = (plan.water_amount_liters / plant.water_needed_per_day()) * 20.0
+                                plant.hydration = min(100.0, plant.hydration + hydration_increase)
+                                actions_taken.append(f"{plan.plant_name}: {plan.water_amount_liters:.1f}L ({plan.reason})")
+                
+                save_state(state)
+                result = {"success": True, "message": f"Smart watering: {'; '.join(actions_taken) if actions_taken else 'No watering needed'}"}
         
-        save_state(state)
-        return {"success": True, "message": f"Smart watering: {'; '.join(actions_taken)}"}
+        else:
+            result = {"success": False, "message": f"Unknown action: {action}"}
+        
+        return result
     
-    else:
-        return {"success": False, "message": f"Unknown action: {action}"}
+    finally:
+        # Resume simulation if it wasn't paused before
+        if not was_paused:
+            time.sleep(0.1)  # Small delay to ensure state is fully written
+            write_control(paused=False)
 
 
 def analyze_critical_issues() -> list:
@@ -479,8 +530,17 @@ def run_autonomous_survival_management(check_interval_days: int = 1, max_days: i
             sim_state = get_simulation_state()
             issues, crisis_level = analyze_critical_issues()
             
+            # Check if plants exist - simulation handles initial planting on day 0
+            if len(sim_state['plants']) == 0:
+                print(f"\n⚠️ Day {state.day}: No plants in greenhouse!")
+                print(f"   Note: Initial planting should happen automatically in simulation on day 0")
+                print(f"   If this persists, there may be a state persistence issue")
+                # Don't try to plant - let simulation handle it
+                time.sleep(1.0)
+                continue
+            
             print(f"\n--- Day {state.day} Check ---")
-            print(f"Crew: {alive_count}/4 | Food: {sim_state['inventory']['total_kcal']:.0f} kcal | Water: {sim_state['resources']['water_liters']:.0f}L")
+            print(f"Crew: {alive_count}/4 | Food: {sim_state['inventory']['total_kcal']:.0f} kcal | Water: {sim_state['resources']['water_liters']:.0f}L | Growing: {sim_state['resources']['growing_area_used']:.0f}/{sim_state['resources']['growing_area_m2']:.0f}m²")
             
             if not issues:
                 print("✓ All systems nominal")

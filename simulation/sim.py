@@ -101,11 +101,16 @@ class Astronaut:
 @dataclass
 class Plant:
     name: str
-    count: int = 1
+    area_m2: float  # Area allocated to this plant instance
     hydration: float = 100.0
     days_planted: int = 0
     growth_cycle_days: int = 30
-    area_m2: float = 1.0
+    plant_id: str = ""  # Unique identifier
+
+    def __post_init__(self):
+        if not self.plant_id:
+            import uuid
+            self.plant_id = str(uuid.uuid4())[:8]
 
     def get_growth_stage(self) -> str:
         if self.hydration < 20.0:
@@ -126,6 +131,11 @@ class Plant:
                      * self.area_m2
                      * SPECIES_HARVEST_INDEX.get(self.name, 0.7)
                      * health_factor, 2)
+    
+    def water_needed_per_day(self) -> float:
+        """Calculate daily water need based on area."""
+        # Base: 0.5L per m² per day
+        return self.area_m2 * 0.5
 
 
 @dataclass
@@ -179,15 +189,20 @@ class Inventory:
 @dataclass
 class Resources:
     water_liters: float    = 1000.0
-    growing_area_m2: float = 50.0
+    growing_area_m2: float = 450.0  # Increased from 150m² to support 4 astronauts
     energy_kwh: float      = 500.0
+    
+    def available_growing_area(self, plants: list) -> float:
+        """Calculate remaining unplanted area."""
+        used_area = sum(p.area_m2 for p in plants)
+        return max(0.0, self.growing_area_m2 - used_area)
 
 
 @dataclass
 class SimState:
     day: int = 0
     astronauts: list = None
-    plants: list = None
+    plants: list = None  # Now a dynamic list that starts empty
     resources: Resources = None
     inventory: Inventory = None
 
@@ -200,13 +215,9 @@ class SimState:
                 Astronaut(id="a4", name="Riley"),
             ]
         if self.plants is None:
-            self.plants = [
-                Plant("Potato",  count=10, growth_cycle_days=90, area_m2=5.0),
-                Plant("Lettuce", count=15, growth_cycle_days=35, area_m2=4.0),
-                Plant("Radish",  count=20, growth_cycle_days=25, area_m2=3.0),
-                Plant("Beans",   count=8,  growth_cycle_days=60, area_m2=3.0),
-                Plant("Herbs",   count=5,  growth_cycle_days=30, area_m2=1.0),
-            ]
+            # Start with NO plants - AI must decide what to plant
+            # Don't reset to [] if plants already exists (even if empty)
+            self.plants = []
         if self.resources is None:
             self.resources = Resources()
         if self.inventory is None:
@@ -217,6 +228,16 @@ class SimState:
         for plant in self.plants:
             plant.hydration = max(0.0, plant.hydration - 2.0)
             plant.days_planted += 1
+        
+        # Auto-harvest mature plants directly into inventory
+        for plant in self.plants:
+            if plant.is_harvestable():
+                kg = plant.harvest_kg()
+                current = getattr(self.inventory, plant.name, 0.0)
+                setattr(self.inventory, plant.name, round(current + kg, 3))
+                plant.days_planted = 0
+                plant.hydration = 100.0
+        
         per_astronaut = self.inventory.consume_for_astronauts(self.astronauts)
         water_per = self.resources.water_liters / max(1, len([a for a in self.astronauts if a.isAlive]))
         for a in self.astronauts:
@@ -234,6 +255,34 @@ class SimState:
                 folate             = per_astronaut.get("folate", 0.0),
                 potassium          = per_astronaut.get("potassium", 0.0),
             )
+    
+    def plant_crop(self, crop_name: str, area_m2: float) -> dict:
+        """Plant a new crop. Returns success status."""
+        available = self.resources.available_growing_area(self.plants)
+        if area_m2 > available:
+            return {"success": False, "message": f"Not enough space. Available: {available:.1f}m²"}
+        
+        # Get growth cycle for this crop
+        growth_cycles = {"Potato": 90, "Lettuce": 35, "Radish": 25, "Beans": 60, "Herbs": 30}
+        growth_cycle = growth_cycles.get(crop_name, 30)
+        
+        new_plant = Plant(
+            name=crop_name,
+            area_m2=area_m2,
+            growth_cycle_days=growth_cycle,
+            hydration=100.0,
+            days_planted=0
+        )
+        self.plants.append(new_plant)
+        return {"success": True, "message": f"Planted {area_m2:.1f}m² of {crop_name}", "plant_id": new_plant.plant_id}
+    
+    def remove_plant(self, plant_id: str) -> dict:
+        """Remove/kill a plant to free up space."""
+        for i, plant in enumerate(self.plants):
+            if plant.plant_id == plant_id:
+                removed = self.plants.pop(i)
+                return {"success": True, "message": f"Removed {removed.name} ({removed.area_m2:.1f}m²)", "freed_area": removed.area_m2}
+        return {"success": False, "message": "Plant not found"}
 
     def to_dict(self):
         return {
@@ -251,8 +300,17 @@ CONTROL_FILE = os.path.join(BASE, "control.json")
 
 
 def save_state(state: SimState):
+    # Debug: Log plant count when saving
+    plant_count = len(state.plants)
     with open(STATE_FILE, "w") as f:
         json.dump(state.to_dict(), f)
+    # Verify the save
+    if plant_count > 0:
+        with open(STATE_FILE, "r") as f:
+            saved_data = json.load(f)
+            saved_plant_count = len(saved_data.get("plants", []))
+            if saved_plant_count != plant_count:
+                print(f"WARNING: Plant count mismatch! Expected {plant_count}, saved {saved_plant_count}")
 
 
 def load_state() -> SimState:
@@ -262,7 +320,14 @@ def load_state() -> SimState:
         data = json.load(f)
     state = SimState(day=data["day"])
     state.astronauts = [Astronaut(**a) for a in data["astronauts"]]
-    state.plants     = [Plant(**p) for p in data["plants"]]
+    # Load plants - handle both old and new format
+    state.plants = []
+    for p_data in data.get("plants", []):
+        # Ensure plant_id exists
+        if 'plant_id' not in p_data:
+            import uuid
+            p_data['plant_id'] = str(uuid.uuid4())[:8]
+        state.plants.append(Plant(**p_data))
     state.resources  = Resources(**data["resources"])
     inv_data = data.get("inventory", {})
     state.inventory  = Inventory(**inv_data) if inv_data else Inventory()
@@ -284,6 +349,33 @@ def write_control(paused: bool, reset: bool = False):
 def run(days: int = 450, tick_delay: float = 3.0):
     write_control(paused=False)
     state = load_state()
+    
+    # INITIAL PLANTING: If starting fresh (day 0) and no plants, do initial planting
+    if state.day == 0 and len(state.plants) == 0:
+        print("=== INITIAL GREENHOUSE SETUP ===")
+        print("Planting initial crops (optimized for 12,000 kcal/day production)...")
+        print("Target: 4 astronauts × 3,000 kcal/day = 12,000 kcal/day")
+        initial_crops = [
+            ("Potato", 300.0),  # Primary calorie source: ~10,400 kcal/day
+            ("Beans", 60.0),    # Protein + calories: ~1,650 kcal/day
+            ("Lettuce", 40.0),  # Micronutrients: ~582 kcal/day
+            ("Radish", 30.0),   # Fast harvest: ~403 kcal/day
+            ("Herbs", 20.0),    # Micronutrients: ~184 kcal/day
+        ]
+        total_area = sum(area for _, area in initial_crops)
+        print(f"Total planting area: {total_area}m² of {state.resources.growing_area_m2}m² available")
+        
+        for crop_name, area in initial_crops:
+            result = state.plant_crop(crop_name, area)
+            if result["success"]:
+                print(f"  ✓ {result['message']}")
+            else:
+                print(f"  ✗ {result['message']}")
+        save_state(state)
+        print(f"=== Initial planting complete: {len(state.plants)} plants ===")
+        print(f"Expected daily production: ~13,219 kcal/day (target: 12,000 kcal/day)")
+        print()
+    
     print(f"Starting from day {state.day}")
     print("TIP: Increase tick_delay for slower simulation (e.g., tick_delay=10.0)")
     while state.day < days:
