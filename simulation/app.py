@@ -51,7 +51,7 @@ st.title("🚀 Mars Base — Day Survival Simulation")
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
 
-c1, c2, c3, _ = st.columns([1, 1, 1, 4])
+c1, c2, _ = st.columns([1, 1, 6])
 with c1:
     if is_paused:
         if st.button("▶️ Resume"):
@@ -62,15 +62,6 @@ with c1:
 with c2:
     if st.button("🔄 Restart"):
         write_control(paused=False, reset=True); st.rerun()
-with c3:
-    if st.button("💧 Hydrate All"):
-        state = load_state()
-        for plant in state.plants:
-            water_needed = plant.count * 0.5
-            if state.resources.water_liters >= water_needed:
-                state.resources.water_liters -= water_needed
-                plant.hydration = min(100.0, plant.hydration + 10.0)
-        save_state(state); st.rerun()
 
 st.caption(f"{'⏸ Paused' if is_paused else '▶ Running'}")
 
@@ -149,14 +140,6 @@ for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
         st.progress(plant.hydration / 100.0)
         st.caption(f"{plant.hydration:.1f}%")
 
-        if st.button("💧 Water", key=f"water_{idx}"):
-            water_needed = plant.count * 0.5
-            if state.resources.water_liters >= water_needed:
-                state.resources.water_liters -= water_needed
-                plant.hydration = min(100.0, plant.hydration + 10.0)
-                save_state(state)
-            st.rerun()
-
         if plant.is_harvestable():
             kg = plant.harvest_kg()
             if st.button(f"🌾 Harvest (~{kg:.1f} kg)", key=f"harvest_{idx}"):
@@ -165,8 +148,6 @@ for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
                 plant.days_planted = 0
                 save_state(state)
                 st.rerun()
-        else:
-            st.button("🌾 Not ready", key=f"harvest_{idx}", disabled=True)
 
 st.markdown("---")
 
