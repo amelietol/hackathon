@@ -15,6 +15,21 @@ class Plant:
     name: str
     count: int = 1  # Number of plants of this type
     hydration: float = 100.0  # 100 = fully hydrated, 0 = dead
+    days_planted: int = 0  # Days since planting
+    growth_cycle_days: int = 30  # Total days to maturity
+    
+    def get_growth_stage(self) -> str:
+        """Returns: seedling, vegetative, mature, or wilting"""
+        if self.hydration < 20.0:
+            return "wilting"
+        
+        progress = self.days_planted / self.growth_cycle_days
+        if progress < 0.25:
+            return "seedling"
+        elif progress < 0.75:
+            return "vegetative"
+        else:
+            return "mature"
 
 @dataclass
 class Resources:
@@ -39,11 +54,11 @@ class SimState:
             ]
         if self.plants is None:
             self.plants = [
-                Plant("Potato", count=10),
-                Plant("Lettuce", count=15),
-                Plant("Radish", count=20),
-                Plant("Beans", count=8),
-                Plant("Herbs", count=5),
+                Plant("Potato", count=10, growth_cycle_days=90),
+                Plant("Lettuce", count=15, growth_cycle_days=35),
+                Plant("Radish", count=20, growth_cycle_days=25),
+                Plant("Beans", count=8, growth_cycle_days=60),
+                Plant("Herbs", count=5, growth_cycle_days=30),
             ]
         if self.resources is None:
             self.resources = Resources()
@@ -51,17 +66,18 @@ class SimState:
     def tick(self):
         self.day += 1
         
-        # Update plant hydration (plants lose water over time, no automatic watering)
+        # Update plant hydration and growth
         for plant in self.plants:
             plant.hydration = max(0.0, plant.hydration - 2.0)
+            plant.days_planted += 1
         
         # Update astronauts
         for a in self.astronauts:
             a.hunger = max(0.0, a.hunger - 5.0)
             
-            # Feed astronauts if plants are healthy
-            healthy_plants = [p for p in self.plants if p.hydration > 20.0]
-            if healthy_plants and a.hunger < 80.0:
+            # Feed astronauts if plants are healthy and mature
+            mature_plants = [p for p in self.plants if p.hydration > 20.0 and p.get_growth_stage() == "mature"]
+            if mature_plants and a.hunger < 80.0:
                 a.hunger = min(100.0, a.hunger + 15.0)
             
             # Health degrades if hungry
