@@ -74,8 +74,19 @@ while True:
         plant_cols = st.columns(len(state.plants))
         for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
             with col:
-                st.markdown(f"**{plant.name}**")
-                st.caption(f"Count: {plant.count}")
+                # Get growth stage and color
+                stage = plant.get_growth_stage()
+                stage_colors = {
+                    "seedling": "🔴",
+                    "vegetative": "🟡", 
+                    "mature": "🟢",
+                    "wilting": "🟤"
+                }
+                stage_emoji = stage_colors.get(stage, "⚪")
+                
+                st.markdown(f"**{plant.name}** {stage_emoji}")
+                st.caption(f"Count: {plant.count} | Day {plant.days_planted}/{plant.growth_cycle_days}")
+                st.caption(f"Stage: {stage.capitalize()}")
                 st.markdown("Hydration")
                 st.progress(plant.hydration / 100.0)
                 st.caption(f"{plant.hydration:.1f}%")

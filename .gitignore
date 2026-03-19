@@ -3,3 +3,7 @@ node_modules
 .amplify
 amplify_outputs*
 amplifyconfiguration*
+
+simulation/state.json
+**/__pycache__/
+**/*.pyc
