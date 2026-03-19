@@ -62,7 +62,14 @@ class Astronaut:
             return
         cal_deficit = max(0.0, self.dailyCalorieNeed - kcal_consumed)
         cal_surplus = max(0.0, kcal_consumed - self.dailyCalorieNeed)
-        self.calorieDeficitAccumulated = max(0.0, self.calorieDeficitAccumulated + cal_deficit - cal_surplus * 0.5)
+        # Recovery rate scales with deficit severity: eat more when in danger
+        if self.calorieDeficitAccumulated > 60000.0:
+            recovery_rate = 1.0  # Critical: full surplus recovers deficit
+        elif self.calorieDeficitAccumulated > 30000.0:
+            recovery_rate = 0.8  # High: 80% recovery
+        else:
+            recovery_rate = 0.5  # Normal: 50% recovery
+        self.calorieDeficitAccumulated = max(0.0, self.calorieDeficitAccumulated + cal_deficit - cal_surplus * recovery_rate)
         prot_deficit = max(0.0, self.dailyProteinNeedG - protein_consumed_g)
         self.proteinDeficitAccumulated = max(0.0, self.proteinDeficitAccumulated + prot_deficit)
         hydration_fraction = min(1.0, water_consumed_l / self.dailyWaterNeedL)
@@ -188,7 +195,7 @@ class Inventory:
 
 @dataclass
 class Resources:
-    water_liters: float    = 1000.0
+    water_liters: float    = 30000.0
     growing_area_m2: float = 450.0  # Increased from 150m² to support 4 astronauts
     energy_kwh: float      = 500.0
     
@@ -228,6 +235,14 @@ class SimState:
         for plant in self.plants:
             plant.hydration = max(0.0, plant.hydration - 2.0)
             plant.days_planted += 1
+
+        # Auto-water plants that drop below 60% hydration
+        for plant in self.plants:
+            if plant.hydration < 60.0:
+                water_needed = plant.water_needed_per_day()
+                if self.resources.water_liters >= water_needed:
+                    self.resources.water_liters -= water_needed
+                    plant.hydration = min(100.0, plant.hydration + 8.0)
         
         # Auto-harvest mature plants directly into inventory
         for plant in self.plants:
@@ -245,6 +260,8 @@ class SimState:
                 continue
             water_given = min(a.dailyWaterNeedL, water_per)
             self.resources.water_liters = max(0.0, self.resources.water_liters - water_given)
+            # Water recycling: 90% recovery via transpiration capture
+            self.resources.water_liters += water_given * 0.90
             a.tick(
                 kcal_consumed      = per_astronaut.get("kcal", 0.0),
                 protein_consumed_g = per_astronaut.get("protein", 0.0),
