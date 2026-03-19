@@ -1,9 +1,51 @@
 import time
+import base64
 import streamlit as st
 from sim import (load_state, save_state, read_control, write_control,
                  SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED)
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
+
+# Set background image
+def set_background(image_path):
+    try:
+        with open(image_path, "rb") as f:
+            img_data = f.read()
+        b64_encoded = base64.b64encode(img_data).decode()
+        
+        st.markdown(f"""
+        <style>
+            .stApp {{
+                background-image: url("data:image/png;base64,{b64_encoded}");
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+                image-rendering: pixelated;
+                image-rendering: -moz-crisp-edges;
+                image-rendering: crisp-edges;
+            }}
+            /* Make text dark red */
+            h1, h2, h3, p, label, .stMarkdown, span, div {{
+                color: #8B0000 !important;
+            }}
+            /* Hide Streamlit header and menu */
+            header {{
+                visibility: hidden;
+            }}
+            #MainMenu {{
+                visibility: hidden;
+            }}
+            footer {{
+                visibility: hidden;
+            }}
+        </style>
+        """, unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning("Background image not found. Using default background.")
+
+set_background("hintergrund _final.png")
+
 st.title("🚀 Mars Base — Day Survival Simulation")
 
 ctrl      = read_control()
@@ -37,7 +79,7 @@ st.subheader(f"📅 Day {state.day} / 450")
 
 st.markdown("### 👨‍🚀 Astronauts")
 cols = st.columns(4)
-for col, a in zip(cols, state.astronauts):
+for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
     with col:
         status = "💀 DEAD" if not a.isAlive else "✅ Alive"
         st.markdown(f"**{a.name}** — {status}")
@@ -45,16 +87,23 @@ for col, a in zip(cols, state.astronauts):
             st.error("Deceased")
             continue
 
-        def bar(label, value, max_val=1.0):
-            col.markdown(label)
-            col.progress(min(1.0, max(0.0, value / max_val)))
-            col.caption(f"{value/max_val*100:.1f}%")
-
-        bar("🫀 Hydration",          a.hydrationLevel)
-        bar("🧠 Cognitive",          a.cognitivePerformance)
-        bar("🦴 Bone Health",        a.boneHealthScore)
-        bar("🛡 Immune",             a.immuneScore)
-        bar("🔬 Micronutrients",     a.micronutrientScore)
+        # Main health indicator - Micronutrients only
+        st.markdown("🔬 Overall Health")
+        st.progress(min(1.0, max(0.0, a.micronutrientScore)))
+        st.caption(f"{a.micronutrientScore*100:.1f}%")
+        
+        # Expandable section for detailed health metrics
+        with st.expander("📊 View Details"):
+            def detail_bar(label, value, max_val=1.0):
+                st.markdown(f"**{label}**")
+                st.progress(min(1.0, max(0.0, value / max_val)))
+                st.caption(f"{value/max_val*100:.1f}%")
+            
+            detail_bar("🫀 Hydration", a.hydrationLevel)
+            detail_bar("🧠 Cognitive", a.cognitivePerformance)
+            detail_bar("🦴 Bone Health", a.boneHealthScore)
+            detail_bar("🛡 Immune", a.immuneScore)
+            detail_bar("🔬 Micronutrients", a.micronutrientScore)
 
         if a.calorieDeficitAccumulated > 0:
             days_equiv = a.calorieDeficitAccumulated / a.dailyCalorieNeed
