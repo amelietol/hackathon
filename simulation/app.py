@@ -176,5 +176,24 @@ with rcols[0]: st.metric("Water",        f"{state.resources.water_liters:.1f} L"
 with rcols[1]: st.metric("Growing Area", f"{state.resources.growing_area_m2:.1f} m²")
 with rcols[2]: st.metric("Energy",       f"{state.resources.energy_kwh:.1f} kWh")
 
+st.markdown("---")
+
+st.markdown("### 🔴 Mars Environment")
+env = state.mars_env
+mc1, mc2, mc3, mc4 = st.columns(4)
+with mc1: st.metric("🌡 External Temp",    f"{env.external_temp_c}°C")
+with mc2: st.metric("🏠 Greenhouse Temp",  f"{env.greenhouse_temp_c}°C")
+with mc3: st.metric("☀️ Solar Irradiance",  f"{env.solar_irradiance_wm2:.0f} W/m²",
+                     delta=f"{(env.solar_irradiance_wm2/1361*100):.0f}% of Earth")
+with mc4: st.metric("💡 Effective PAR",     f"{env.effective_par():.0f} µmol/m²/s")
+
+mc5, mc6, mc7, mc8 = st.columns(4)
+with mc5: st.metric("🪨 Gravity",          f"{env.gravity_factor*100:.0f}% Earth",
+                     delta=f"{env.gravity_ms2:.2f} m/s²")
+with mc6: st.metric("☢️ Radiation (inside)", f"{env.effective_radiation():.2f} mSv/day")
+with mc7: st.metric("🫁 CO₂ (greenhouse)",  f"{env.greenhouse_co2_ppm:.0f} ppm")
+with mc8: st.metric("🏭 Pressure (ext.)",   f"{env.external_pressure_mbar:.1f} mbar",
+                     delta=f"{(env.external_pressure_mbar/1013*100):.1f}% of Earth")
+
 time.sleep(1)
 st.rerun()
