@@ -27,6 +27,58 @@ DAILY_POTASSIUM_MG    = 4700.0
 
 
 @dataclass
+class MarsEnvironment:
+    """Static Martian conditions — no events, just the baseline reality."""
+    # Atmosphere
+    external_pressure_mbar: float = 6.5         # Mars surface: 6-7 mbar
+    greenhouse_pressure_mbar: float = 1013.0    # Earth-like pressurized interior
+    external_co2_pct: float = 95.32             # Mars atmosphere composition
+    greenhouse_co2_ppm: float = 1000.0          # Optimal for crops (800-1200)
+
+    # Temperature
+    external_temp_c: float = -63.0              # Mars average surface temp
+    greenhouse_temp_c: float = 22.0             # Maintained for crops
+
+    # Solar & Lighting
+    solar_irradiance_wm2: float = 590.0         # ~43% of Earth (1361 W/m²)
+    led_supplement_par: float = 200.0           # LED PAR µmol/m²/s
+
+    # Radiation (no magnetic field, thin atmosphere)
+    radiation_msv_per_day: float = 0.67         # Surface dose rate
+    greenhouse_shielding: float = 0.70          # 70% blocked by structure
+
+    # Gravity
+    gravity_ms2: float = 3.721                  # 38% of Earth (9.81 m/s²)
+    gravity_factor: float = 0.38
+
+    def effective_par(self) -> float:
+        """Total PAR available inside greenhouse (µmol/m²/s)."""
+        # Mars solar contributes ~250 µmol/m²/s at equator noon (43% of Earth)
+        solar_par = 250.0 * (self.solar_irradiance_wm2 / 590.0)
+        return min(500.0, solar_par + self.led_supplement_par)
+
+    def effective_radiation(self) -> float:
+        """Radiation dose reaching inside greenhouse (mSv/day)."""
+        return self.radiation_msv_per_day * (1.0 - self.greenhouse_shielding)
+
+    def growth_modifier(self) -> float:
+        """Combined modifier on plant growth from Mars conditions.
+        Gravity: ~91% efficiency (plants grow slightly slower in 0.38g).
+        CO2: optimal at 800-1200 ppm (bonus), reduced below 400 ppm.
+        """
+        # Gravity effect: 0.85 + gravity_factor * 0.15 → 0.907 on Mars
+        grav_mod = 0.85 + self.gravity_factor * 0.15
+        # CO2 effect
+        if self.greenhouse_co2_ppm < 400:
+            co2_mod = 0.70
+        elif self.greenhouse_co2_ppm <= 1200:
+            co2_mod = 1.0  # Optimal range
+        else:
+            co2_mod = 0.95  # Slightly too high
+        return grav_mod * co2_mod
+
+
+@dataclass
 class Astronaut:
     id: str
     name: str
@@ -212,6 +264,7 @@ class SimState:
     plants: list = None  # Now a dynamic list that starts empty
     resources: Resources = None
     inventory: Inventory = None
+    mars_env: MarsEnvironment = None
 
     def __post_init__(self):
         if self.astronauts is None:
@@ -222,18 +275,26 @@ class SimState:
                 Astronaut(id="a4", name="Riley"),
             ]
         if self.plants is None:
-            # Start with NO plants - AI must decide what to plant
-            # Don't reset to [] if plants already exists (even if empty)
             self.plants = []
         if self.resources is None:
             self.resources = Resources()
         if self.inventory is None:
             self.inventory = Inventory()
+        if self.mars_env is None:
+            self.mars_env = MarsEnvironment()
 
     def tick(self):
         self.day += 1
+
+        # ── Mars growth modifier (gravity + CO₂) ────────────────────────
+        growth_mod = self.mars_env.growth_modifier()  # ~0.907 nominal
+        effective_rad = self.mars_env.effective_radiation()  # mSv/day inside
+
         for plant in self.plants:
-            plant.hydration = max(0.0, plant.hydration - 2.0)
+            # Hydration drain slightly faster in low-g (altered transpiration)
+            plant.hydration = max(0.0, plant.hydration - 2.0 / growth_mod)
+            # Radiation stress: minor hydration penalty
+            plant.hydration = max(0.0, plant.hydration - effective_rad * 0.3)
             plant.days_planted += 1
 
         # Auto-water plants that drop below 60% hydration
@@ -247,7 +308,8 @@ class SimState:
         # Auto-harvest mature plants directly into inventory
         for plant in self.plants:
             if plant.is_harvestable():
-                kg = plant.harvest_kg()
+                # Mars conditions reduce yield slightly via growth_mod
+                kg = plant.harvest_kg() * growth_mod
                 current = getattr(self.inventory, plant.name, 0.0)
                 setattr(self.inventory, plant.name, round(current + kg, 3))
                 plant.days_planted = 0
@@ -272,6 +334,14 @@ class SimState:
                 folate             = per_astronaut.get("folate", 0.0),
                 potassium          = per_astronaut.get("potassium", 0.0),
             )
+            # ── Mars gravity: accelerated bone loss (1.62× Earth rate) ───
+            gravity_bone_penalty = (2.0 - self.mars_env.gravity_factor)  # ~1.62
+            a.boneHealthScore = max(0.0, a.boneHealthScore - 0.0003 * gravity_bone_penalty)
+            # ── Mars radiation: slow immune degradation ──────────────────
+            a.immuneScore = max(0.0, a.immuneScore - effective_rad * 0.0005)
+            # ── High CO₂ cognitive effect (>1500 ppm) ────────────────────
+            if self.mars_env.greenhouse_co2_ppm > 1500:
+                a.cognitivePerformance = max(0.0, a.cognitivePerformance - 0.001)
     
     def plant_crop(self, crop_name: str, area_m2: float) -> dict:
         """Plant a new crop. Returns success status."""
@@ -308,6 +378,7 @@ class SimState:
             "plants":     [asdict(p) for p in self.plants],
             "resources":  asdict(self.resources),
             "inventory":  asdict(self.inventory),
+            "mars_env":   asdict(self.mars_env),
         }
 
 
@@ -348,6 +419,11 @@ def load_state() -> SimState:
     state.resources  = Resources(**data["resources"])
     inv_data = data.get("inventory", {})
     state.inventory  = Inventory(**inv_data) if inv_data else Inventory()
+    env_data = data.get("mars_env", {})
+    # Filter out any keys that no longer exist in MarsEnvironment
+    valid_env_fields = {f.name for f in MarsEnvironment.__dataclass_fields__.values()}
+    env_data = {k: v for k, v in env_data.items() if k in valid_env_fields}
+    state.mars_env = MarsEnvironment(**env_data) if env_data else MarsEnvironment()
     return state
 
 
@@ -412,7 +488,7 @@ def run(days: int = 450, tick_delay: float = 3.0):
         total_emergency_rations = sum(a.storedFoodCalories for a in state.astronauts if a.isAlive)
         greenhouse_food = state.inventory.total_kcal()
         total_food = total_emergency_rations + greenhouse_food
-        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f})")
+        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f}) | Water: {state.resources.water_liters:.0f} L")
         time.sleep(tick_delay)
     print("Simulation complete.")
 
