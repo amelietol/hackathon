@@ -6,35 +6,6 @@ from sim import (load_state, save_state, read_control, write_control,
                  SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED, SimState)
 from resource_optimizer import calculate_optimal_watering, calculate_harvest_priority
 
-# AI Agent setup - Simple rule-based agent (no AWS Bedrock required)
-def simple_ai_agent(day: int, alive_count: int, total_food: float, water_liters: float, plants: list):
-    """Simple rule-based AI agent for Mars greenhouse management."""
-    days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
-    
-    # Critical alerts
-    if alive_count == 0:
-        return "⚠️ Mission failed: All astronauts deceased. Restart simulation."
-    if days_of_food < 5:
-        return f"🚨 CRITICAL: Only {days_of_food:.1f} days of food left! Harvest mature crops immediately."
-    if water_liters < 500:
-        return f"💧 Water critically low ({water_liters:.0f}L). Check recycling system and reduce consumption."
-    
-    # Warnings
-    if days_of_food < 15:
-        return f"⚠️ Food supply low ({days_of_food:.1f} days). Monitor crop growth and plan harvests."
-    if water_liters < 1000:
-        return f"💧 Water reserves declining ({water_liters:.0f}L). Monitor plant hydration carefully."
-    
-    # Status updates
-    mature_plants = sum(1 for p in plants if p.is_harvestable())
-    if mature_plants > 0:
-        return f"✅ {mature_plants} crops ready to harvest. Food reserves: {days_of_food:.1f} days."
-    
-    # All good
-    return f"✅ Systems nominal. {alive_count}/4 alive, {days_of_food:.1f} days food, {water_liters:.0f}L water."
-
-agent = simple_ai_agent  # Use simple agent instead of Bedrock
-
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
 # Set background image
@@ -458,12 +429,15 @@ with mc8:
 
 # Run simulation tick if not paused
 if not is_paused:
-    # Initialize tick flag if not exists
-    if 'has_ticked' not in st.session_state:
-        st.session_state.has_ticked = False
+    # Initialize tick tracking
+    if 'last_ticked_day' not in st.session_state:
+        st.session_state.last_ticked_day = -1
     
-    # Only tick once per cycle
-    if not st.session_state.has_ticked:
+    # Load current state
+    current_day = state.day
+    
+    # Only tick if we haven't ticked this day yet
+    if st.session_state.last_ticked_day < current_day:
         # Check for event triggers
         t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
         t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
@@ -486,12 +460,12 @@ if not is_paused:
         # Perform the tick
         state.tick()
         save_state(state)
-        st.session_state.has_ticked = True
+        
+        # Update last ticked day
+        st.session_state.last_ticked_day = state.day
     
     # Wait 3 seconds before next tick
     time.sleep(3)
-    # Reset flag for next cycle
-    st.session_state.has_ticked = False
     st.rerun()
 else:
     # When paused, just refresh UI without ticking
