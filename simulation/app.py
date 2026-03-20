@@ -596,8 +596,6 @@ if not is_paused:
     
     # Wait 3 seconds before next tick
     time.sleep(3)
-    st.rerun()
-else:
-    # When paused, still refresh but less frequently
-    time.sleep(1)
-    st.rerun()
+
+# Always rerun to keep UI updating
+st.rerun()
