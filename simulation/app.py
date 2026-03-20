@@ -26,7 +26,6 @@ def get_ai_agent():
         with mcp_client:
             mcp_tools = mcp_client.list_tools_sync()
         
-        # Use Bedrock directly without agent ARNs
         agent = Agent(
             model=MODEL,
             tools=mcp_tools,
@@ -36,10 +35,9 @@ def get_ai_agent():
                 "Keep responses under 2 sentences for real-time display."
             ),
         )
-        return agent, None
+        return agent, None  # Don't return mcp_client since we can't keep context open
     except Exception as e:
-        # Log the actual error for debugging
-        print(f"Agent initialization error: {e}")
+        st.warning(f"AI agent unavailable: {e}")
         return None, None
 
 agent, _ = get_ai_agent()
