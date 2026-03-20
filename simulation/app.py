@@ -26,6 +26,7 @@ def get_ai_agent():
         with mcp_client:
             mcp_tools = mcp_client.list_tools_sync()
         
+        # Use Bedrock directly without agent ARNs
         agent = Agent(
             model=MODEL,
             tools=mcp_tools,
@@ -35,9 +36,10 @@ def get_ai_agent():
                 "Keep responses under 2 sentences for real-time display."
             ),
         )
-        return agent, None  # Don't return mcp_client since we can't keep context open
+        return agent, None
     except Exception as e:
-        st.warning(f"AI agent unavailable: {e}")
+        # Log the actual error for debugging
+        print(f"Agent initialization error: {e}")
         return None, None
 
 agent, _ = get_ai_agent()
@@ -559,7 +561,10 @@ if not is_paused:
                 # Log AI activity
                 log_agent_activity(state.day, 'ai_analysis', response_text)
             except Exception as e:
-                log_agent_activity(state.day, 'alert', f"AI error: {str(e)[:50]}")
+                # Don't log AWS credential errors repeatedly
+                error_msg = str(e)
+                if "AccessDenied" not in error_msg or state.day % 50 == 0:
+                    log_agent_activity(state.day, 'alert', f"AI unavailable: AWS credentials may have expired")
     
     # Log watering and harvest recommendations
     if len(state.plants) > 0:
