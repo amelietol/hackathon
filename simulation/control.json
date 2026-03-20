@@ -1,1 +1,1 @@
-{"paused": false, "reset": false, "trigger_storm": false, "trigger_water_failure": false, "trigger_meteorite": false, "trigger_solar_flare": false}
+{"paused": false, "reset": false, "trigger_storm": false, "trigger_water_failure": false, "trigger_meteorite": true, "trigger_solar_flare": false}
