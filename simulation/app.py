@@ -2,7 +2,7 @@ import time
 import base64
 import streamlit as st
 from sim import (load_state, save_state, read_control, write_control,
-                 SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED)
+                 SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED, SimState)
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
@@ -75,7 +75,22 @@ with c1:
             write_control(paused=True); st.rerun()
 with c2:
     if st.button("Restart"):
-        write_control(paused=False, reset=True); st.rerun()
+        # Reset simulation state directly
+        state = SimState()
+        # Initial planting for new simulation
+        if len(state.plants) == 0:
+            initial_crops = [
+                ("Potato", 300.0),
+                ("Beans", 60.0),
+                ("Lettuce", 40.0),
+                ("Radish", 30.0),
+                ("Herbs", 20.0),
+            ]
+            for crop_name, area in initial_crops:
+                state.plant_crop(crop_name, area)
+        save_state(state)
+        write_control(paused=False, reset=False)
+        st.rerun()
 with c3:
     state_peek = load_state()
     storm_active = state_peek.mars_env.dust_storm_active if hasattr(state_peek, 'mars_env') and state_peek.mars_env else False
@@ -105,6 +120,20 @@ with c6:
 st.caption(f"{'Paused' if is_paused else 'Running'}")
 
 state = load_state()
+
+# Initial planting if starting fresh
+if state.day == 0 and len(state.plants) == 0:
+    initial_crops = [
+        ("Potato", 300.0),
+        ("Beans", 60.0),
+        ("Lettuce", 40.0),
+        ("Radish", 30.0),
+        ("Herbs", 20.0),
+    ]
+    for crop_name, area in initial_crops:
+        state.plant_crop(crop_name, area)
+    save_state(state)
+
 st.subheader(f"Day {state.day} / 450")
 
 # Dust storm warning banner
@@ -391,6 +420,31 @@ with mc8:
         rec_delta = "nominal"
     st.metric("Water Recycling",   f"{recycling*100:.0f}%",
               delta=rec_delta)
+
+# Run simulation tick if not paused
+if not is_paused:
+    # Check for event triggers
+    t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
+    t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
+    t_meteor = ctrl.get("trigger_meteorite")
+    t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
+
+    if t_storm or t_water or t_meteor or t_flare:
+        # Clear all triggers
+        write_control(paused=False)
+
+    if t_storm:
+        state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
+    if t_water:
+        state.mars_env.trigger_water_failure(duration_days=10)
+    if t_meteor:
+        state.mars_env.trigger_meteorite(area_lost_m2=50.0)
+    if t_flare:
+        state.mars_env.trigger_solar_flare(duration_days=3)
+    
+    # Run one simulation tick
+    state.tick()
+    save_state(state)
 
 time.sleep(1)
 st.rerun()

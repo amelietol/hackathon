@@ -37,7 +37,7 @@ Get your temporary credentials from AWS Workshop Studio:
 ## Important Notes
 
 ### Simulation Loop
-The app currently expects `sim.py` to run separately. For Streamlit Cloud, the simulation logic runs within the Streamlit app itself (via the auto-rerun every 1 second).
+The simulation now runs directly within the Streamlit app. Each time the page refreshes (every 1 second), it advances the simulation by one day if not paused. You don't need to run `sim.py` separately anymore.
 
 ### File Paths
 All image files (background, astronauts, plants) must be in the `simulation/` directory since that's where `app.py` runs from.
