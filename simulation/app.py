@@ -15,6 +15,14 @@ MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 def get_ai_agent():
     """Initialize Claude Haiku agent with MCP knowledge base."""
     try:
+        # Configure AWS credentials from Streamlit secrets
+        import os
+        if "AWS_ACCESS_KEY_ID" in st.secrets:
+            os.environ["AWS_ACCESS_KEY_ID"] = st.secrets["AWS_ACCESS_KEY_ID"]
+            os.environ["AWS_SECRET_ACCESS_KEY"] = st.secrets["AWS_SECRET_ACCESS_KEY"]
+            os.environ["AWS_SESSION_TOKEN"] = st.secrets.get("AWS_SESSION_TOKEN", "")
+            os.environ["AWS_DEFAULT_REGION"] = st.secrets.get("AWS_REGION", "us-west-2")
+        
         from strands import Agent
         from strands.tools.mcp import MCPClient
         from mcp.client.streamable_http import streamablehttp_client
