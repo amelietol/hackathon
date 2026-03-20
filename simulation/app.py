@@ -3,6 +3,7 @@ import base64
 import streamlit as st
 from sim import (load_state, save_state, read_control, write_control,
                  SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED, SimState)
+from resource_optimizer import calculate_optimal_watering, calculate_harvest_priority
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
@@ -380,6 +381,49 @@ rcols = st.columns(3)
 with rcols[0]: st.metric("Water",        f"{state.resources.water_liters:.1f} L")
 with rcols[1]: st.metric("Growing Area", f"{state.resources.growing_area_m2:.1f} m²")
 with rcols[2]: st.metric("Energy",       f"{state.resources.energy_kwh:.1f} kWh")
+
+st.markdown("---")
+
+st.markdown("## AI Recommendations")
+
+# Convert state to format optimizer expects
+plants_data = []
+for p in state.plants:
+    plants_data.append({
+        'name': p.name,
+        'area_m2': p.area_m2,
+        'hydration': p.hydration,
+        'days_planted': p.days_planted,
+        'growth_cycle': p.growth_cycle_days,
+        'stage': p.get_growth_stage(),
+        'harvestable': p.is_harvestable(),
+        'expected_yield_kg': p.harvest_kg() if p.is_harvestable() else 0
+    })
+
+# Get AI recommendations
+if len(plants_data) > 0:
+    watering_plans = calculate_optimal_watering(plants_data, state.resources.water_liters)
+    
+    # Show top 3 watering recommendations
+    st.markdown("### Watering Priorities")
+    for i, plan in enumerate(watering_plans[:3]):
+        priority_color = {"1": "🔴", "2": "🟡", "3": "🟢"}
+        st.caption(f"{priority_color.get(str(plan.priority), '⚪')} {plan.plant_name}: {plan.water_amount_liters:.1f}L - {plan.reason}")
+    
+    # Harvest recommendations
+    total_food = state.inventory.total_kcal()
+    alive_count = sum(1 for a in state.astronauts if a.isAlive)
+    days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+    shortage_severity = max(0.0, min(1.0, 1.0 - (days_of_food / 30.0)))
+    
+    harvest_priorities = calculate_harvest_priority(plants_data, shortage_severity)
+    if len(harvest_priorities) > 0:
+        st.markdown("### Harvest Recommendations")
+        for plant_name, priority, reason in harvest_priorities[:3]:
+            priority_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🟢"
+            st.caption(f"{priority_icon} {plant_name}: {reason}")
+else:
+    st.caption("No crops planted yet")
 
 st.markdown("---")
 
