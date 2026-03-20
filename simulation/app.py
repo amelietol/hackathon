@@ -19,8 +19,12 @@ def get_ai_agent():
         from strands.tools.mcp import MCPClient
         from mcp.client.streamable_http import streamablehttp_client
         
+        # Create MCP client but don't enter context yet
         mcp_client = MCPClient(lambda: streamablehttp_client(MCP_URL))
-        mcp_tools = mcp_client.list_tools_sync()
+        
+        # Get tools within context
+        with mcp_client:
+            mcp_tools = mcp_client.list_tools_sync()
         
         agent = Agent(
             model=MODEL,
@@ -31,14 +35,30 @@ def get_ai_agent():
                 "Keep responses under 2 sentences for real-time display."
             ),
         )
-        return agent, mcp_client
+        return agent, None  # Don't return mcp_client since we can't keep context open
     except Exception as e:
         st.warning(f"AI agent unavailable: {e}")
         return None, None
 
-agent, mcp_client = get_ai_agent()
+agent, _ = get_ai_agent()
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
+
+# Agent activity log (stored in session state)
+if 'agent_log' not in st.session_state:
+    st.session_state.agent_log = []
+
+def log_agent_activity(day: int, activity_type: str, message: str):
+    """Log agent activity for monitoring."""
+    st.session_state.agent_log.append({
+        'day': day,
+        'type': activity_type,
+        'message': message,
+        'timestamp': time.time()
+    })
+    # Keep only last 20 entries
+    if len(st.session_state.agent_log) > 20:
+        st.session_state.agent_log = st.session_state.agent_log[-20:]
 
 # Set background image
 def set_background(image_path):
@@ -95,6 +115,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Mars Base — Day Survival Simulation")
+
+# Sidebar for Agent Monitoring
+with st.sidebar:
+    st.markdown("## 🤖 Agent Monitor")
+    st.caption("Real-time AI decision tracking")
+    
+    if len(st.session_state.agent_log) > 0:
+        st.markdown("### Recent Activity")
+        for entry in reversed(st.session_state.agent_log[-10:]):
+            icon = {
+                'ai_analysis': '🧠',
+                'watering': '💧',
+                'harvest': '🌾',
+                'alert': '⚠️',
+                'status': '✅'
+            }.get(entry['type'], '📝')
+            
+            st.markdown(f"**Day {entry['day']}** {icon}")
+            st.caption(entry['message'])
+            st.markdown("---")
+    else:
+        st.caption("No agent activity yet")
+    
+    # Agent stats
+    st.markdown("### Agent Stats")
+    ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
+    action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
+    st.metric("AI Consultations", ai_count)
+    st.metric("Actions Taken", action_count)
 
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
@@ -444,6 +493,10 @@ if len(plants_data) > 0:
         priority_color = {"1": "🔴", "2": "🟡", "3": "🟢"}
         st.caption(f"{priority_color.get(str(plan.priority), '⚪')} {plan.plant_name}: {plan.water_amount_liters:.1f}L - {plan.reason}")
     
+    # Log watering recommendations
+    if watering_plans and watering_plans[0].priority == 1:
+        log_agent_activity(state.day, 'watering', f"Critical: {watering_plans[0].plant_name} needs {watering_plans[0].water_amount_liters:.1f}L")
+    
     # Harvest recommendations
     total_food = state.inventory.total_kcal()
     alive_count = sum(1 for a in state.astronauts if a.isAlive)
@@ -456,20 +509,28 @@ if len(plants_data) > 0:
         for plant_name, priority, reason in harvest_priorities[:3]:
             priority_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🟢"
             st.caption(f"{priority_icon} {plant_name}: {reason}")
+        
+        # Log urgent harvests
+        if harvest_priorities[0][1] == 1:
+            log_agent_activity(state.day, 'harvest', f"Urgent: Harvest {harvest_priorities[0][0]} - {harvest_priorities[0][2]}")
     
     # Claude AI Analysis (only on critical days or every 20 days)
-    if agent and mcp_client and (days_of_food < 10 or state.day % 20 == 0):
+    if agent and (days_of_food < 10 or state.day % 20 == 0):
         with st.expander("🧠 Claude AI Analysis", expanded=(days_of_food < 10)):
             with st.spinner("Consulting AI..."):
                 try:
                     # Brief prompt for fast response
                     prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
                     
-                    with mcp_client:
-                        response = agent(prompt)
-                        st.info(str(response)[:300])  # Limit to 300 chars
+                    response = agent(prompt)
+                    response_text = str(response)[:300]
+                    st.info(response_text)
+                    
+                    # Log AI activity
+                    log_agent_activity(state.day, 'ai_analysis', response_text[:100] + "...")
                 except Exception as e:
                     st.caption(f"AI temporarily unavailable")
+                    log_agent_activity(state.day, 'alert', f"AI unavailable: {str(e)[:50]}")
 else:
     st.caption("No crops planted yet")
 
@@ -537,6 +598,11 @@ if not is_paused:
     # Run one simulation tick
     state.tick()
     save_state(state)
+    
+    # Log status updates every 10 days
+    if state.day % 10 == 0:
+        alive = sum(1 for a in state.astronauts if a.isAlive)
+        log_agent_activity(state.day, 'status', f"{alive}/4 alive, {state.inventory.total_kcal():.0f} kcal, {state.resources.water_liters:.0f}L water")
     
     # Wait 3 seconds before next tick
     time.sleep(3)
