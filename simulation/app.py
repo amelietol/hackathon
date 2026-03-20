@@ -93,6 +93,10 @@ def set_background(image_path):
             footer {{
                 visibility: hidden;
             }}
+            /* Prevent rendering artifacts during rerun */
+            .stApp > div {{
+                opacity: 1 !important;
+            }}
         </style>
         """, unsafe_allow_html=True)
     except FileNotFoundError:
@@ -536,5 +540,8 @@ if not is_paused:
     
     # Wait 3 seconds before next tick
     time.sleep(3)
-
-st.rerun()
+    st.rerun()
+else:
+    # When paused, still refresh but less frequently
+    time.sleep(1)
+    st.rerun()
