@@ -56,9 +56,6 @@ st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 if 'agent_log' not in st.session_state:
     st.session_state.agent_log = []
 
-if 'last_processed_day' not in st.session_state:
-    st.session_state.last_processed_day = -1
-
 def log_agent_activity(day: int, activity_type: str, message: str):
     """Log agent activity for monitoring."""
     st.session_state.agent_log.append({
@@ -524,30 +521,28 @@ with mc8:
 
 # Run simulation tick if not paused
 if not is_paused:
-    # Only tick if we haven't processed this day yet
-    current_day = state.day
+    # Check for event triggers
+    t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
+    t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
+    t_meteor = ctrl.get("trigger_meteorite")
+    t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
+
+    if t_storm or t_water or t_meteor or t_flare:
+        # Clear all triggers
+        write_control(paused=False)
+
+    if t_storm:
+        state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
+    if t_water:
+        state.mars_env.trigger_water_failure(duration_days=10)
+    if t_meteor:
+        state.mars_env.trigger_meteorite(area_lost_m2=50.0)
+    if t_flare:
+        state.mars_env.trigger_solar_flare(duration_days=3)
     
-    if st.session_state.last_processed_day != current_day:
-        st.session_state.last_processed_day = current_day
-        
-        # Check for event triggers
-        t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
-        t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
-        t_meteor = ctrl.get("trigger_meteorite")
-        t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
-
-        if t_storm or t_water or t_meteor or t_flare:
-            # Clear all triggers
-            write_control(paused=False)
-
-        if t_storm:
-            state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
-        if t_water:
-            state.mars_env.trigger_water_failure(duration_days=10)
-        if t_meteor:
-            state.mars_env.trigger_meteorite(area_lost_m2=50.0)
-        if t_flare:
-            state.mars_env.trigger_solar_flare(duration_days=3)
+    # Only tick if this is a new day (check against last saved day)
+    if 'last_day' not in st.session_state or st.session_state.last_day != state.day:
+        st.session_state.last_day = state.day
         
         # Run one simulation tick
         state.tick()
@@ -579,7 +574,7 @@ if not is_paused:
                     # Don't log AWS credential errors repeatedly
                     error_msg = str(e)
                     if "AccessDenied" not in error_msg or state.day % 50 == 0:
-                        log_agent_activity(state.day, 'alert', f"AI unavailable: AWS credentials may have expired")
+                        log_agent_activity(state.day, 'alert', f"AI unavailable: Check AWS credentials in Streamlit secrets")
         
         # Log watering and harvest recommendations
         if len(state.plants) > 0:
@@ -610,9 +605,9 @@ if not is_paused:
             harvest_priorities = calculate_harvest_priority(plants_data, shortage_severity)
             if harvest_priorities and harvest_priorities[0][1] == 1:
                 log_agent_activity(state.day, 'harvest', f"Urgent: Harvest {harvest_priorities[0][0]} - {harvest_priorities[0][2]}")
-        
-        # Wait 3 seconds before next tick
-        time.sleep(3)
+    
+    # Wait 3 seconds before next tick
+    time.sleep(3)
 
 # Always rerun to keep UI updating
 st.rerun()
