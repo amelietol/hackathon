@@ -521,10 +521,6 @@ with mc8:
 
 # Run simulation tick if not paused
 if not is_paused:
-    # Load current state to check day
-    state_before = load_state()
-    current_day_before = state_before.day
-    
     # Check for event triggers
     t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
     t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
@@ -544,9 +540,11 @@ if not is_paused:
     if t_flare:
         state.mars_env.trigger_solar_flare(duration_days=3)
     
-    # Run one simulation tick
-    state.tick()
-    save_state(state)
+    # Only tick if we haven't already ticked this cycle (prevent double-tick on rerun)
+    if 'last_tick_day' not in st.session_state or st.session_state.last_tick_day != state.day:
+        state.tick()
+        save_state(state)
+        st.session_state.last_tick_day = state.day
     
     # Log status updates every 10 days
     if state.day % 10 == 0:
