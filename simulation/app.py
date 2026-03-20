@@ -120,44 +120,6 @@ st.markdown("""
 
 st.title("Mars Base — Day Survival Simulation")
 
-# Sidebar for Agent Monitoring
-with st.sidebar:
-    st.markdown("## 🤖 Agent Monitor")
-    
-    # Toggle button for sidebar
-    if 'sidebar_expanded' not in st.session_state:
-        st.session_state.sidebar_expanded = True
-    
-    if st.button("▼ Hide" if st.session_state.sidebar_expanded else "▶ Show"):
-        st.session_state.sidebar_expanded = not st.session_state.sidebar_expanded
-    
-    if st.session_state.sidebar_expanded:
-        st.caption("Real-time AI decision tracking")
-        
-        if len(st.session_state.agent_log) > 0:
-            st.markdown("### Recent Activity")
-            for entry in reversed(st.session_state.agent_log[-10:]):
-                icon = {
-                    'ai_analysis': '🧠',
-                    'watering': '💧',
-                    'harvest': '🌾',
-                    'alert': '⚠️',
-                    'status': '✅'
-                }.get(entry['type'], '📝')
-                
-                st.markdown(f"**Day {entry['day']}** {icon}")
-                st.caption(entry['message'])
-                st.markdown("---")
-        else:
-            st.caption("No agent activity yet")
-        
-        # Agent stats
-        st.markdown("### Agent Stats")
-        ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
-        action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
-        st.metric("AI Consultations", ai_count)
-        st.metric("Actions Taken", action_count)
-
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
 
@@ -231,6 +193,38 @@ if state.day == 0 and len(state.plants) == 0:
     save_state(state)
 
 st.subheader(f"Day {state.day} / 450")
+
+# Agent Monitor (collapsible)
+with st.expander("🤖 Agent Monitor - Real-time AI decision tracking", expanded=False):
+    if len(st.session_state.agent_log) > 0:
+        st.markdown("### Recent Activity")
+        cols_monitor = st.columns(2)
+        for idx, entry in enumerate(reversed(st.session_state.agent_log[-10:])):
+            col = cols_monitor[idx % 2]
+            with col:
+                icon = {
+                    'ai_analysis': '🧠',
+                    'watering': '💧',
+                    'harvest': '🌾',
+                    'alert': '⚠️',
+                    'status': '✅'
+                }.get(entry['type'], '📝')
+                
+                st.markdown(f"**Day {entry['day']}** {icon}")
+                st.caption(entry['message'])
+                st.markdown("---")
+        
+        # Agent stats
+        st.markdown("### Agent Stats")
+        stat_cols = st.columns(2)
+        ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
+        action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
+        with stat_cols[0]:
+            st.metric("AI Consultations", ai_count)
+        with stat_cols[1]:
+            st.metric("Actions Taken", action_count)
+    else:
+        st.caption("No agent activity yet")
 
 # Dust storm warning banner
 if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.dust_storm_active:
