@@ -51,7 +51,7 @@ st.title("🚀 Mars Base — Day Survival Simulation")
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
 
-c1, c2, c3, _ = st.columns([1, 1, 1.5, 4.5])
+c1, c2, c3, c4, c5, c6, _ = st.columns([1, 1, 1.5, 1.5, 1.5, 1.5, 1])
 with c1:
     if is_paused:
         if st.button("▶️ Resume"):
@@ -66,10 +66,27 @@ with c3:
     state_peek = load_state()
     storm_active = state_peek.mars_env.dust_storm_active if hasattr(state_peek, 'mars_env') and state_peek.mars_env else False
     if storm_active:
-        st.button("🌪️ Storm Active", disabled=True)
+        st.button("🌪️ Storm Active 🟡 Medium", disabled=True)
     else:
-        if st.button("🌪️ Dust Storm"):
+        if st.button("🌪️ Dust Storm 🟡 Medium"):
             write_control(paused=False, trigger_storm=True); st.rerun()
+with c4:
+    water_fail = state_peek.mars_env.water_failure_active if hasattr(state_peek, 'mars_env') and state_peek.mars_env else False
+    if water_fail:
+        st.button("💧 Pump Down 🔴 High", disabled=True)
+    else:
+        if st.button("💧 Water Failure 🔴 High"):
+            write_control(paused=False, trigger_water_failure=True); st.rerun()
+with c5:
+    if st.button("☄️ Meteorite 🔴 High"):
+        write_control(paused=False, trigger_meteorite=True); st.rerun()
+with c6:
+    flare = state_peek.mars_env.solar_flare_active if hasattr(state_peek, 'mars_env') and state_peek.mars_env else False
+    if flare:
+        st.button("☀️ Flare Active 🟢 Low", disabled=True)
+    else:
+        if st.button("☀️ Solar Flare 🟢 Low"):
+            write_control(paused=False, trigger_solar_flare=True); st.rerun()
 
 st.caption(f"{'⏸ Paused' if is_paused else '▶ Running'}")
 
@@ -82,12 +99,40 @@ if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.dust_storm_a
     temp_now = env.effective_greenhouse_temp()
     temp_drop = env.greenhouse_temp_c - temp_now
     st.error(
-        f"🌪️ DUST STORM IN PROGRESS — {env.dust_storm_days_remaining} days remaining\n\n"
+        f"🌪️ DUST STORM IN PROGRESS [🟡 Medium Impact] — {env.dust_storm_days_remaining} days remaining\n\n"
         f"Severity: {env.dust_storm_severity*100:.0f}% · "
         f"Greenhouse temp dropped from {env.greenhouse_temp_c:.0f}°C → {temp_now:.0f}°C (−{temp_drop:.0f}°C) · "
         f"Light: {env.effective_par():.0f} µmol/m²/s (normal: 450) · "
         f"Water recycling: {env.water_recycling_efficiency()*100:.0f}% (normal: 90%) · "
         f"Growth rate: {env.growth_modifier()*100:.0f}% (normal: 91%)"
+    )
+
+# Water recycling failure banner
+if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.water_failure_active:
+    env = state.mars_env
+    st.error(
+        f"💧 WATER RECYCLING FAILURE [🔴 High Impact] — {env.water_failure_days_remaining} days remaining\n\n"
+        f"Pump malfunction! Recycling dropped from 90% → {env.water_recycling_efficiency()*100:.0f}% · "
+        f"Water reserves draining faster — rationing critical"
+    )
+
+# Solar flare banner
+if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.solar_flare_active:
+    env = state.mars_env
+    st.error(
+        f"☀️ SOLAR FLARE [🟢 Low Impact] — {env.solar_flare_days_remaining} days remaining\n\n"
+        f"Radiation spike! Inside dose: {env.effective_radiation():.2f} mSv/day (normal: 0.20 mSv/day) · "
+        f"Immune systems under heavy stress · Shielding partially overwhelmed"
+    )
+
+# Meteorite damage indicator (show if growing area is below original 450 m²)
+if state.resources.growing_area_m2 < 450.0:
+    area_lost = 450.0 - state.resources.growing_area_m2
+    st.warning(
+        f"☄️ METEORITE DAMAGE — {area_lost:.0f} m² of growing area destroyed permanently\n\n"
+        f"Remaining: {state.resources.growing_area_m2:.0f} m² of 450 m² · "
+        f"Active crops: {len(state.plants)} · "
+        f"Lost {area_lost/450.0*100:.0f}% of greenhouse capacity"
     )
 
 st.markdown("## Astronauts")
@@ -257,12 +302,22 @@ with mc4:
 mc5, mc6, mc7, mc8 = st.columns(4)
 with mc5: st.metric("🪨 Gravity",          f"{env.gravity_factor*100:.0f}% Earth",
                      delta=f"{env.gravity_ms2:.2f} m/s²")
-with mc6: st.metric("☢️ Radiation (inside)", f"{env.effective_radiation():.2f} mSv/day")
+with mc6:
+    rad = env.effective_radiation()
+    rad_status = "⚠️ FLARE 5×" if env.solar_flare_active else "nominal"
+    st.metric("☢️ Radiation (inside)", f"{rad:.2f} mSv/day",
+              delta=rad_status)
 with mc7: st.metric("🫁 CO₂ (greenhouse)",  f"{env.greenhouse_co2_ppm:.0f} ppm")
 with mc8:
     recycling = env.water_recycling_efficiency()
+    if env.water_failure_active:
+        rec_delta = "⚠️ PUMP FAIL"
+    elif recycling != 0.9:
+        rec_delta = f"{(recycling - 0.9)*100:+.0f}%"
+    else:
+        rec_delta = "nominal"
     st.metric("♻️ Water Recycling",   f"{recycling*100:.0f}%",
-              delta=f"{(recycling - 0.9)*100:+.0f}%" if recycling != 0.9 else "nominal")
+              delta=rec_delta)
 
 time.sleep(1)
 st.rerun()
