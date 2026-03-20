@@ -473,33 +473,40 @@ with mc8:
 
 # Run simulation tick if not paused
 if not is_paused:
-    # Check for event triggers
-    t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
-    t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
-    t_meteor = ctrl.get("trigger_meteorite")
-    t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
-
-    if t_storm or t_water or t_meteor or t_flare:
-        # Clear all triggers
-        write_control(paused=False)
-
-    if t_storm:
-        state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
-    if t_water:
-        state.mars_env.trigger_water_failure(duration_days=10)
-    if t_meteor:
-        state.mars_env.trigger_meteorite(area_lost_m2=50.0)
-    if t_flare:
-        state.mars_env.trigger_solar_flare(duration_days=3)
+    # Initialize tick flag if not exists
+    if 'has_ticked' not in st.session_state:
+        st.session_state.has_ticked = False
     
-    # Only tick if we haven't already ticked this cycle (prevent double-tick on rerun)
-    if 'last_tick_day' not in st.session_state or st.session_state.last_tick_day != state.day:
+    # Only tick once per cycle
+    if not st.session_state.has_ticked:
+        # Check for event triggers
+        t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
+        t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
+        t_meteor = ctrl.get("trigger_meteorite")
+        t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
+
+        if t_storm or t_water or t_meteor or t_flare:
+            # Clear all triggers
+            write_control(paused=False)
+
+        if t_storm:
+            state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
+        if t_water:
+            state.mars_env.trigger_water_failure(duration_days=10)
+        if t_meteor:
+            state.mars_env.trigger_meteorite(area_lost_m2=50.0)
+        if t_flare:
+            state.mars_env.trigger_solar_flare(duration_days=3)
+        
+        # Perform the tick
         state.tick()
         save_state(state)
-        st.session_state.last_tick_day = state.day
+        st.session_state.has_ticked = True
     
     # Wait 3 seconds before next tick
     time.sleep(3)
+    # Reset flag for next cycle
+    st.session_state.has_ticked = False
     st.rerun()
 else:
     # When paused, just refresh UI without ticking
