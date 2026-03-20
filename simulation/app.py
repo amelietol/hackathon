@@ -25,9 +25,9 @@ def set_background(image_path):
                 image-rendering: -moz-crisp-edges;
                 image-rendering: crisp-edges;
             }}
-            /* Make text dark red */
+            /* Make text black */
             h1, h2, h3, p, label, .stMarkdown, span, div {{
-                color: #8B0000 !important;
+                color: #000000 !important;
             }}
             /* Hide Streamlit header and menu */
             header {{
@@ -44,7 +44,7 @@ def set_background(image_path):
     except FileNotFoundError:
         st.warning("Background image not found. Using default background.")
 
-set_background("hintergrund _final.png")
+set_background("hg.jpeg")
 
 st.title("🚀 Mars Base — Day Survival Simulation")
 
@@ -72,18 +72,43 @@ st.markdown("### 👨‍🚀 Astronauts")
 cols = st.columns(4)
 for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
     with col:
-        status = "💀 DEAD" if not a.isAlive else "✅ Alive"
-        st.markdown(f"**{a.name}** — {status}")
+        status = "💀 DEAD" if not a.isAlive else ""
+        st.markdown(f"<h4 style='text-align: center;'>{a.name} {status}</h4>", unsafe_allow_html=True)
+        
         if not a.isAlive:
             st.error("Deceased")
+        else:
+            # Main health indicator - Micronutrients only (above image)
+            st.markdown("🔬 Overall Health")
+            # Create a green progress bar (less neon)
+            health_value = min(1.0, max(0.0, a.micronutrientScore))
+            st.markdown(f"""
+                <div style="width: 100%; background-color: #ddd; border-radius: 5px;">
+                    <div style="width: {health_value*100}%; background-color: #4CAF50; height: 20px; border-radius: 5px;"></div>
+                </div>
+            """, unsafe_allow_html=True)
+            st.caption(f"{a.micronutrientScore*100:.1f}%")
+        
+        # Display astronaut image (cropped from top 20%)
+        try:
+            st.markdown("""
+                <style>
+                .astronaut-img img {
+                    object-fit: cover;
+                    object-position: 0% 100%;
+                    height: 80%;
+                    margin-top: 20%;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+            st.image("astronaut.png", use_container_width=True)
+        except:
+            pass
+        
+        if not a.isAlive:
             continue
 
-        # Main health indicator - Micronutrients only
-        st.markdown("🔬 Overall Health")
-        st.progress(min(1.0, max(0.0, a.micronutrientScore)))
-        st.caption(f"{a.micronutrientScore*100:.1f}%")
-        
-        # Expandable section for detailed health metrics
+        # Expandable section for detailed health metrics (below image)
         with st.expander("📊 View Details"):
             def detail_bar(label, value, max_val=1.0):
                 st.markdown(f"**{label}**")
@@ -132,6 +157,33 @@ stage_icon = {"seedling":"🔴","vegetative":"🟡","mature":"🟢","wilting":"�
 plant_cols = st.columns(len(state.plants))
 for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
     with col:
+        # Display plant image if available
+        if plant.name == "Potato":
+            try:
+                st.image("potato.png", use_container_width=True)
+            except:
+                pass
+        elif plant.name == "Beans":
+            try:
+                st.image("beans.png", use_container_width=True)
+            except:
+                pass
+        elif plant.name == "Lettuce":
+            try:
+                st.image("lettuce.png", use_container_width=True)
+            except:
+                pass
+        elif plant.name == "Radish":
+            try:
+                st.image("radish.png", use_container_width=True)
+            except:
+                pass
+        elif plant.name == "Herbs":
+            try:
+                st.image("herbs.png", use_container_width=True)
+            except:
+                pass
+        
         stage = plant.get_growth_stage()
         st.markdown(f"**{plant.name}** {stage_icon.get(stage,'⚪')}")
         st.caption(f"Day {plant.days_planted}/{plant.growth_cycle_days} · {stage.capitalize()}")
