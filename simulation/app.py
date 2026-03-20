@@ -90,7 +90,7 @@ if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.dust_storm_a
         f"Growth rate: {env.growth_modifier()*100:.0f}% (normal: 91%)"
     )
 
-st.markdown("### 👨‍🚀 Astronauts")
+st.markdown("## Astronauts")
 cols = st.columns(4)
 for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
     with col:
@@ -153,7 +153,7 @@ for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
 
 st.markdown("---")
 
-st.markdown("### 📦 Food Inventory")
+st.markdown("## Food Inventory")
 inv        = state.inventory
 total_kcal = inv.total_kcal()
 total_kg   = inv.total_kg()
@@ -173,7 +173,7 @@ st.caption(f"🍽 Greenhouse food covers **{days_left:.1f}** days for {alive_cou
 
 st.markdown("---")
 
-st.markdown("### 🌱 Greenhouse")
+st.markdown("## Greenhouse")
 stage_icon = {"seedling":"🔴","vegetative":"🟡","mature":"🟢","wilting":"🟤"}
 
 if len(state.plants) == 0:
@@ -228,7 +228,7 @@ else:
 
 st.markdown("---")
 
-st.markdown("### ⚙️ Resources")
+st.markdown("## Resources")
 rcols = st.columns(3)
 with rcols[0]: st.metric("Water",        f"{state.resources.water_liters:.1f} L")
 with rcols[1]: st.metric("Growing Area", f"{state.resources.growing_area_m2:.1f} m²")
@@ -236,7 +236,7 @@ with rcols[2]: st.metric("Energy",       f"{state.resources.energy_kwh:.1f} kWh"
 
 st.markdown("---")
 
-st.markdown("### 🔴 Mars Environment")
+st.markdown("## Mars Environment")
 env = state.mars_env
 actual_temp = env.effective_greenhouse_temp()
 actual_par = env.effective_par()
