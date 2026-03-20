@@ -48,6 +48,9 @@ st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 if 'agent_log' not in st.session_state:
     st.session_state.agent_log = []
 
+if 'last_processed_day' not in st.session_state:
+    st.session_state.last_processed_day = -1
+
 def log_agent_activity(day: int, activity_type: str, message: str):
     """Log agent activity for monitoring."""
     st.session_state.agent_log.append({
@@ -513,89 +516,95 @@ with mc8:
 
 # Run simulation tick if not paused
 if not is_paused:
-    # Check for event triggers
-    t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
-    t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
-    t_meteor = ctrl.get("trigger_meteorite")
-    t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
+    # Only tick if we haven't processed this day yet
+    current_day = state.day
+    
+    if st.session_state.last_processed_day != current_day:
+        st.session_state.last_processed_day = current_day
+        
+        # Check for event triggers
+        t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
+        t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
+        t_meteor = ctrl.get("trigger_meteorite")
+        t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
 
-    if t_storm or t_water or t_meteor or t_flare:
-        # Clear all triggers
-        write_control(paused=False)
+        if t_storm or t_water or t_meteor or t_flare:
+            # Clear all triggers
+            write_control(paused=False)
 
-    if t_storm:
-        state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
-    if t_water:
-        state.mars_env.trigger_water_failure(duration_days=10)
-    if t_meteor:
-        state.mars_env.trigger_meteorite(area_lost_m2=50.0)
-    if t_flare:
-        state.mars_env.trigger_solar_flare(duration_days=3)
-    
-    # Run one simulation tick
-    state.tick()
-    save_state(state)
-    
-    # Log status updates every 10 days
-    if state.day % 10 == 0:
-        alive = sum(1 for a in state.astronauts if a.isAlive)
-        log_agent_activity(state.day, 'status', f"{alive}/4 alive, {state.inventory.total_kcal():.0f} kcal, {state.resources.water_liters:.0f}L water")
-    
-    # Run AI agent analysis on critical days or every 20 days
-    if agent and len(state.plants) > 0:
-        total_food = state.inventory.total_kcal()
-        alive_count = sum(1 for a in state.astronauts if a.isAlive)
-        days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+        if t_storm:
+            state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
+        if t_water:
+            state.mars_env.trigger_water_failure(duration_days=10)
+        if t_meteor:
+            state.mars_env.trigger_meteorite(area_lost_m2=50.0)
+        if t_flare:
+            state.mars_env.trigger_solar_flare(duration_days=3)
         
-        # Run AI on critical situations or every 20 days
-        if days_of_food < 10 or state.day % 20 == 0:
-            try:
-                # Brief prompt for fast response
-                prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
-                
-                response = agent(prompt)
-                response_text = str(response)[:200]
-                
-                # Log AI activity
-                log_agent_activity(state.day, 'ai_analysis', response_text)
-            except Exception as e:
-                # Don't log AWS credential errors repeatedly
-                error_msg = str(e)
-                if "AccessDenied" not in error_msg or state.day % 50 == 0:
-                    log_agent_activity(state.day, 'alert', f"AI unavailable: AWS credentials may have expired")
-    
-    # Log watering and harvest recommendations
-    if len(state.plants) > 0:
-        plants_data = []
-        for p in state.plants:
-            plants_data.append({
-                'name': p.name,
-                'area_m2': p.area_m2,
-                'hydration': p.hydration,
-                'days_planted': p.days_planted,
-                'growth_cycle': p.growth_cycle_days,
-                'stage': p.get_growth_stage(),
-                'harvestable': p.is_harvestable(),
-                'expected_yield_kg': p.harvest_kg() if p.is_harvestable() else 0
-            })
+        # Run one simulation tick
+        state.tick()
+        save_state(state)
         
-        # Check watering needs
-        watering_plans = calculate_optimal_watering(plants_data, state.resources.water_liters)
-        if watering_plans and watering_plans[0].priority == 1:
-            log_agent_activity(state.day, 'watering', f"Critical: {watering_plans[0].plant_name} needs {watering_plans[0].water_amount_liters:.1f}L")
+        # Log status updates every 10 days
+        if state.day % 10 == 0:
+            alive = sum(1 for a in state.astronauts if a.isAlive)
+            log_agent_activity(state.day, 'status', f"{alive}/4 alive, {state.inventory.total_kcal():.0f} kcal, {state.resources.water_liters:.0f}L water")
         
-        # Check harvest needs
-        total_food = state.inventory.total_kcal()
-        alive_count = sum(1 for a in state.astronauts if a.isAlive)
-        days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
-        shortage_severity = max(0.0, min(1.0, 1.0 - (days_of_food / 30.0)))
+        # Run AI agent analysis on critical days or every 20 days
+        if agent and len(state.plants) > 0:
+            total_food = state.inventory.total_kcal()
+            alive_count = sum(1 for a in state.astronauts if a.isAlive)
+            days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+            
+            # Run AI on critical situations or every 20 days
+            if days_of_food < 10 or state.day % 20 == 0:
+                try:
+                    # Brief prompt for fast response
+                    prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
+                    
+                    response = agent(prompt)
+                    response_text = str(response)[:200]
+                    
+                    # Log AI activity
+                    log_agent_activity(state.day, 'ai_analysis', response_text)
+                except Exception as e:
+                    # Don't log AWS credential errors repeatedly
+                    error_msg = str(e)
+                    if "AccessDenied" not in error_msg or state.day % 50 == 0:
+                        log_agent_activity(state.day, 'alert', f"AI unavailable: AWS credentials may have expired")
         
-        harvest_priorities = calculate_harvest_priority(plants_data, shortage_severity)
-        if harvest_priorities and harvest_priorities[0][1] == 1:
-            log_agent_activity(state.day, 'harvest', f"Urgent: Harvest {harvest_priorities[0][0]} - {harvest_priorities[0][2]}")
-    
-    # Wait 3 seconds before next tick
-    time.sleep(3)
+        # Log watering and harvest recommendations
+        if len(state.plants) > 0:
+            plants_data = []
+            for p in state.plants:
+                plants_data.append({
+                    'name': p.name,
+                    'area_m2': p.area_m2,
+                    'hydration': p.hydration,
+                    'days_planted': p.days_planted,
+                    'growth_cycle': p.growth_cycle_days,
+                    'stage': p.get_growth_stage(),
+                    'harvestable': p.is_harvestable(),
+                    'expected_yield_kg': p.harvest_kg() if p.is_harvestable() else 0
+                })
+            
+            # Check watering needs
+            watering_plans = calculate_optimal_watering(plants_data, state.resources.water_liters)
+            if watering_plans and watering_plans[0].priority == 1:
+                log_agent_activity(state.day, 'watering', f"Critical: {watering_plans[0].plant_name} needs {watering_plans[0].water_amount_liters:.1f}L")
+            
+            # Check harvest needs
+            total_food = state.inventory.total_kcal()
+            alive_count = sum(1 for a in state.astronauts if a.isAlive)
+            days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+            shortage_severity = max(0.0, min(1.0, 1.0 - (days_of_food / 30.0)))
+            
+            harvest_priorities = calculate_harvest_priority(plants_data, shortage_severity)
+            if harvest_priorities and harvest_priorities[0][1] == 1:
+                log_agent_activity(state.day, 'harvest', f"Urgent: Harvest {harvest_priorities[0][0]} - {harvest_priorities[0][2]}")
+        
+        # Wait 3 seconds before next tick
+        time.sleep(3)
 
 # Always rerun to keep UI updating
 st.rerun()
