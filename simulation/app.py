@@ -123,31 +123,40 @@ st.title("Mars Base — Day Survival Simulation")
 # Sidebar for Agent Monitoring
 with st.sidebar:
     st.markdown("## 🤖 Agent Monitor")
-    st.caption("Real-time AI decision tracking")
     
-    if len(st.session_state.agent_log) > 0:
-        st.markdown("### Recent Activity")
-        for entry in reversed(st.session_state.agent_log[-10:]):
-            icon = {
-                'ai_analysis': '🧠',
-                'watering': '💧',
-                'harvest': '🌾',
-                'alert': '⚠️',
-                'status': '✅'
-            }.get(entry['type'], '📝')
-            
-            st.markdown(f"**Day {entry['day']}** {icon}")
-            st.caption(entry['message'])
-            st.markdown("---")
-    else:
-        st.caption("No agent activity yet")
+    # Toggle button for sidebar
+    if 'sidebar_expanded' not in st.session_state:
+        st.session_state.sidebar_expanded = True
     
-    # Agent stats
-    st.markdown("### Agent Stats")
-    ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
-    action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
-    st.metric("AI Consultations", ai_count)
-    st.metric("Actions Taken", action_count)
+    if st.button("▼ Hide" if st.session_state.sidebar_expanded else "▶ Show"):
+        st.session_state.sidebar_expanded = not st.session_state.sidebar_expanded
+    
+    if st.session_state.sidebar_expanded:
+        st.caption("Real-time AI decision tracking")
+        
+        if len(st.session_state.agent_log) > 0:
+            st.markdown("### Recent Activity")
+            for entry in reversed(st.session_state.agent_log[-10:]):
+                icon = {
+                    'ai_analysis': '🧠',
+                    'watering': '💧',
+                    'harvest': '🌾',
+                    'alert': '⚠️',
+                    'status': '✅'
+                }.get(entry['type'], '📝')
+                
+                st.markdown(f"**Day {entry['day']}** {icon}")
+                st.caption(entry['message'])
+                st.markdown("---")
+        else:
+            st.caption("No agent activity yet")
+        
+        # Agent stats
+        st.markdown("### Agent Stats")
+        ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
+        action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
+        st.metric("AI Consultations", ai_count)
+        st.metric("Actions Taken", action_count)
 
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
