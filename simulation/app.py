@@ -139,22 +139,32 @@ if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.solar_flare_
         f"Immune systems under heavy stress · Shielding partially overwhelmed"
     )
 
-# Meteorite damage indicator (show if growing area is below original 450 m²)
-if state.resources.growing_area_m2 < 450.0:
-    area_lost = 450.0 - state.resources.growing_area_m2
-    st.warning(
-        f"METEORITE DAMAGE — {area_lost:.0f} m² of growing area destroyed permanently\n\n"
-        f"Remaining: {state.resources.growing_area_m2:.0f} m² of 450 m² · "
-        f"Active crops: {len(state.plants)} · "
-        f"Lost {area_lost/450.0*100:.0f}% of greenhouse capacity"
-    )
+# Meteorite damage / repair indicator
+env_check = state.mars_env
+if state.resources.growing_area_m2 < 450.0 or (hasattr(env_check, 'repair_active') and env_check.repair_active):
+    area_lost = max(0, 450.0 - state.resources.growing_area_m2)
+    if env_check.repair_active:
+        repair_name = next((a.name for a in state.astronauts if a.id == env_check.repair_astronaut_id), "Unknown")
+        st.warning(
+            f"☄️ METEORITE DAMAGE — 🔧 {repair_name} repairing ({env_check.repair_days_remaining} days left)\n\n"
+            f"Restoring 5 m²/day · Current: {state.resources.growing_area_m2:.0f} m² → Target: {env_check.repair_area_target:.0f} m² · "
+            f"⚠️ {repair_name} consuming 1.5× calories during EVA repair"
+        )
+    elif area_lost > 0:
+        st.warning(
+            f"METEORITE DAMAGE — {area_lost:.0f} m² of growing area destroyed\n\n"
+            f"Remaining: {state.resources.growing_area_m2:.0f} m² of 450 m² · "
+            f"Active crops: {len(state.plants)} · "
+            f"Lost {area_lost/450.0*100:.0f}% of greenhouse capacity"
+        )
 
 st.markdown("## Astronauts")
 cols = st.columns(4)
 for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
     with col:
-        status = "DEAD" if not a.isAlive else ""
-        st.markdown(f"<h4 style='text-align: center;'>{a.name} {status}</h4>", unsafe_allow_html=True)
+        status = "💀 DEAD" if not a.isAlive else ""
+        repair_tag = " 🔧" if (hasattr(state.mars_env, 'repair_active') and state.mars_env.repair_active and a.id == state.mars_env.repair_astronaut_id) else ""
+        st.markdown(f"<h4 style='text-align: center;'>{a.name} {status}{repair_tag}</h4>", unsafe_allow_html=True)
         
         if not a.isAlive:
             st.error("Deceased")
