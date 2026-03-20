@@ -7,10 +7,11 @@ import boto3
 from typing import Optional
 from sim import load_state, save_state, SimState
 
-# Agent ARNs
-ENV_AGENT_ARN = "arn:aws:bedrock-agentcore:us-west-2:610690630138:runtime/mars_environment_agent-90e0pIH7bS"
-NUTRITION_AGENT_ARN = "arn:aws:bedrock-agentcore:us-west-2:610690630138:runtime/mars_nutrition_agent-vu7e2N4JEg"
-REGION = "us-west-2"
+# Agent ARNs - load from environment or use defaults
+import os
+ENV_AGENT_ARN = os.getenv("ENV_AGENT_ARN", "arn:aws:bedrock-agentcore:us-west-2:610690630138:runtime/mars_environment_agent-90e0pIH7bS")
+NUTRITION_AGENT_ARN = os.getenv("NUTRITION_AGENT_ARN", "arn:aws:bedrock-agentcore:us-west-2:610690630138:runtime/mars_nutrition_agent-vu7e2N4JEg")
+REGION = os.getenv("AWS_REGION", "us-west-2")
 
 
 class AgentBridge:
