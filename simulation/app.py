@@ -6,49 +6,34 @@ from sim import (load_state, save_state, read_control, write_control,
                  SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED, SimState)
 from resource_optimizer import calculate_optimal_watering, calculate_harvest_priority
 
-# AI Agent setup
-MCP_URL = "https://kb-start-hack-gateway-buyjtibfpg.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
-MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+# AI Agent setup - Simple rule-based agent (no AWS Bedrock required)
+def simple_ai_agent(day: int, alive_count: int, total_food: float, water_liters: float, plants: list):
+    """Simple rule-based AI agent for Mars greenhouse management."""
+    days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+    
+    # Critical alerts
+    if alive_count == 0:
+        return "⚠️ Mission failed: All astronauts deceased. Restart simulation."
+    if days_of_food < 5:
+        return f"🚨 CRITICAL: Only {days_of_food:.1f} days of food left! Harvest mature crops immediately."
+    if water_liters < 500:
+        return f"💧 Water critically low ({water_liters:.0f}L). Check recycling system and reduce consumption."
+    
+    # Warnings
+    if days_of_food < 15:
+        return f"⚠️ Food supply low ({days_of_food:.1f} days). Monitor crop growth and plan harvests."
+    if water_liters < 1000:
+        return f"💧 Water reserves declining ({water_liters:.0f}L). Monitor plant hydration carefully."
+    
+    # Status updates
+    mature_plants = sum(1 for p in plants if p.is_harvestable())
+    if mature_plants > 0:
+        return f"✅ {mature_plants} crops ready to harvest. Food reserves: {days_of_food:.1f} days."
+    
+    # All good
+    return f"✅ Systems nominal. {alive_count}/4 alive, {days_of_food:.1f} days food, {water_liters:.0f}L water."
 
-# Initialize AI agent (cached to avoid recreating on every rerun)
-@st.cache_resource
-def get_ai_agent():
-    """Initialize Claude Haiku agent with MCP knowledge base."""
-    try:
-        # Configure AWS credentials from Streamlit secrets
-        import os
-        if "AWS_ACCESS_KEY_ID" in st.secrets:
-            os.environ["AWS_ACCESS_KEY_ID"] = st.secrets["AWS_ACCESS_KEY_ID"]
-            os.environ["AWS_SECRET_ACCESS_KEY"] = st.secrets["AWS_SECRET_ACCESS_KEY"]
-            os.environ["AWS_SESSION_TOKEN"] = st.secrets.get("AWS_SESSION_TOKEN", "")
-            os.environ["AWS_DEFAULT_REGION"] = st.secrets.get("AWS_REGION", "us-west-2")
-        
-        from strands import Agent
-        from strands.tools.mcp import MCPClient
-        from mcp.client.streamable_http import streamablehttp_client
-        
-        # Create MCP client but don't enter context yet
-        mcp_client = MCPClient(lambda: streamablehttp_client(MCP_URL))
-        
-        # Get tools within context
-        with mcp_client:
-            mcp_tools = mcp_client.list_tools_sync()
-        
-        agent = Agent(
-            model=MODEL,
-            tools=mcp_tools,
-            system_prompt=(
-                "You are the Mars Greenhouse AI managing a life-critical system. "
-                "Analyze simulation data and provide brief, actionable recommendations. "
-                "Keep responses under 2 sentences for real-time display."
-            ),
-        )
-        return agent, None  # Don't return mcp_client since we can't keep context open
-    except Exception as e:
-        st.warning(f"AI agent unavailable: {e}")
-        return None, None
-
-agent, _ = get_ai_agent()
+agent = simple_ai_agent  # Use simple agent instead of Bedrock
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
@@ -576,11 +561,14 @@ if not is_paused:
                         st.session_state.agent_busy = True
                         st.session_state.last_agent_day = state.day
                         
-                        # Brief prompt for fast response
-                        prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
-                        
-                        response = agent(prompt)
-                        response_text = str(response)[:200]
+                        # Call simple rule-based agent
+                        response_text = agent(
+                            day=state.day,
+                            alive_count=alive_count,
+                            total_food=total_food,
+                            water_liters=state.resources.water_liters,
+                            plants=state.plants
+                        )
                         
                         # Log AI activity
                         log_agent_activity(state.day, 'ai_analysis', response_text)
