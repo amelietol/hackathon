@@ -56,6 +56,18 @@ class MarsEnvironment:
     dust_storm_days_remaining: int = 0
     dust_storm_severity: float = 0.0            # 0 = none, 0.6 = medium
 
+    # Water recycling failure state
+    water_failure_active: bool = False
+    water_failure_days_remaining: int = 0
+
+    # Meteorite strike state
+    meteorite_struck: bool = False               # One-shot flag, cleared after processing
+    meteorite_area_lost: float = 0.0             # m² destroyed this strike
+
+    # Solar flare state
+    solar_flare_active: bool = False
+    solar_flare_days_remaining: int = 0
+
     def effective_par(self) -> float:
         """Total PAR inside greenhouse. Storm blocks sunlight, LEDs partially compensate."""
         solar_par = 250.0 * (self.solar_irradiance_wm2 / 590.0)
@@ -68,8 +80,11 @@ class MarsEnvironment:
         return max(50.0, min(500.0, solar_par + led_par))
 
     def effective_radiation(self) -> float:
-        """Radiation dose reaching inside greenhouse (mSv/day)."""
-        return self.radiation_msv_per_day * (1.0 - self.greenhouse_shielding)
+        """Radiation dose reaching inside greenhouse (mSv/day). Solar flare = 5× spike."""
+        base = self.radiation_msv_per_day * (1.0 - self.greenhouse_shielding)
+        if self.solar_flare_active:
+            base *= 5.0  # Flare overwhelms shielding
+        return base
 
     def effective_greenhouse_temp(self) -> float:
         """Greenhouse temp drops during storms (less solar heating, more energy to heating)."""
@@ -79,10 +94,14 @@ class MarsEnvironment:
         return self.greenhouse_temp_c
 
     def water_recycling_efficiency(self) -> float:
-        """Normally 90%. Storm reduces power → pumps run slower → efficiency drops."""
+        """Normally 90%. Storm or pump failure reduces it."""
+        eff = 0.90
         if self.dust_storm_active:
-            return 0.90 - self.dust_storm_severity * 0.25  # 0.75 at severity 0.6
-        return 0.90
+            eff -= self.dust_storm_severity * 0.25
+        if self.water_failure_active:
+            eff = min(eff, 0.45)  # Pump failure caps at 45%
+        return max(0.10, eff)
+
 
     def growth_modifier(self) -> float:
         """Combined modifier on plant growth from Mars conditions + storm effects."""
@@ -115,6 +134,21 @@ class MarsEnvironment:
         self.dust_storm_severity = max(0.1, min(1.0, severity))
         self.dust_storm_days_remaining = duration_days
 
+    def trigger_water_failure(self, duration_days: int = 10):
+        """Pump failure — recycling drops to 45% for duration."""
+        self.water_failure_active = True
+        self.water_failure_days_remaining = duration_days
+
+    def trigger_meteorite(self, area_lost_m2: float = 50.0):
+        """One-shot meteorite strike. Destroys growing area + kills plants."""
+        self.meteorite_struck = True
+        self.meteorite_area_lost = area_lost_m2
+
+    def trigger_solar_flare(self, duration_days: int = 3):
+        """Radiation spike — 5× normal for a few days."""
+        self.solar_flare_active = True
+        self.solar_flare_days_remaining = duration_days
+
     def tick_storm(self):
         """Advance storm by one day. Auto-resolves when days run out."""
         if not self.dust_storm_active:
@@ -124,6 +158,22 @@ class MarsEnvironment:
             self.dust_storm_active = False
             self.dust_storm_severity = 0.0
             self.dust_storm_days_remaining = 0
+
+    def tick_events(self):
+        """Advance all non-storm event timers."""
+        if self.water_failure_active:
+            self.water_failure_days_remaining -= 1
+            if self.water_failure_days_remaining <= 0:
+                self.water_failure_active = False
+                self.water_failure_days_remaining = 0
+        if self.solar_flare_active:
+            self.solar_flare_days_remaining -= 1
+            if self.solar_flare_days_remaining <= 0:
+                self.solar_flare_active = False
+                self.solar_flare_days_remaining = 0
+        # Meteorite is one-shot, cleared after processing in tick()
+        self.meteorite_struck = False
+        self.meteorite_area_lost = 0.0
 
 
 @dataclass
@@ -401,8 +451,33 @@ class SimState:
             if self.mars_env.greenhouse_co2_ppm > 1500:
                 a.cognitivePerformance = max(0.0, a.cognitivePerformance - 0.001)
 
-        # ── Advance dust storm timer (at end so effects apply on last day) ─
+        # ── Meteorite strike: destroy plants + reduce growing area ─────────
+        if self.mars_env.meteorite_struck:
+            area_to_destroy = self.mars_env.meteorite_area_lost
+            self.resources.growing_area_m2 = max(50.0, self.resources.growing_area_m2 - area_to_destroy)
+            # Kill plants in the destroyed area (remove from end)
+            destroyed_area = 0.0
+            destroyed_plants = []
+            for p in reversed(self.plants):
+                if destroyed_area >= area_to_destroy:
+                    break
+                destroyed_area += p.area_m2
+                destroyed_plants.append(p)
+            for p in destroyed_plants:
+                self.plants.remove(p)
+
+        # ── Solar flare: extra radiation damage to astronauts ────────────
+        if self.mars_env.solar_flare_active:
+            for a in self.astronauts:
+                if not a.isAlive:
+                    continue
+                # Flare hammers immune system and hydration
+                a.immuneScore = max(0.0, a.immuneScore - 0.008)
+                a.hydrationLevel = max(0.0, a.hydrationLevel - 0.005)
+
+        # ── Advance event timers (at end so effects apply on last day) ───
         self.mars_env.tick_storm()
+        self.mars_env.tick_events()
     
     def plant_crop(self, crop_name: str, area_m2: float) -> dict:
         """Plant a new crop. Returns success status."""
@@ -495,9 +570,17 @@ def read_control() -> dict:
         return json.load(f)
 
 
-def write_control(paused: bool, reset: bool = False, trigger_storm: bool = False):
+def write_control(paused: bool, reset: bool = False, trigger_storm: bool = False,
+                  trigger_water_failure: bool = False, trigger_meteorite: bool = False,
+                  trigger_solar_flare: bool = False):
     with open(CONTROL_FILE, "w") as f:
-        json.dump({"paused": paused, "reset": reset, "trigger_storm": trigger_storm}, f)
+        json.dump({
+            "paused": paused, "reset": reset,
+            "trigger_storm": trigger_storm,
+            "trigger_water_failure": trigger_water_failure,
+            "trigger_meteorite": trigger_meteorite,
+            "trigger_solar_flare": trigger_solar_flare,
+        }, f)
 
 
 def run(days: int = 450, tick_delay: float = 3.0):
@@ -543,19 +626,39 @@ def run(days: int = 450, tick_delay: float = 3.0):
         if ctrl.get("paused"):
             time.sleep(0.2)
             continue
-        # Check for dust storm trigger from frontend
-        if ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active:
+        # Check for all event triggers from frontend (read once, clear once)
+        t_storm = ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active
+        t_water = ctrl.get("trigger_water_failure") and not state.mars_env.water_failure_active
+        t_meteor = ctrl.get("trigger_meteorite")
+        t_flare = ctrl.get("trigger_solar_flare") and not state.mars_env.solar_flare_active
+
+        if t_storm or t_water or t_meteor or t_flare:
+            # Clear all triggers in one write to avoid race conditions
+            write_control(paused=False)
+
+        if t_storm:
             state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
-            write_control(paused=False, trigger_storm=False)
             print(f"🌪️ DUST STORM TRIGGERED! Severity: 60%, Duration: 12 days")
+        if t_water:
+            state.mars_env.trigger_water_failure(duration_days=10)
+            print(f"💧 WATER RECYCLING FAILURE! Recycling drops to 45% for 10 days")
+        if t_meteor:
+            state.mars_env.trigger_meteorite(area_lost_m2=50.0)
+            print(f"☄️ METEORITE STRIKE! ~50 m² of growing area destroyed")
+        if t_flare:
+            state.mars_env.trigger_solar_flare(duration_days=3)
+            print(f"☀️ SOLAR FLARE! Radiation 5× for 3 days")
         state.tick()
         save_state(state)
         alive = sum(1 for a in state.astronauts if a.isAlive)
         total_emergency_rations = sum(a.storedFoodCalories for a in state.astronauts if a.isAlive)
         greenhouse_food = state.inventory.total_kcal()
         total_food = total_emergency_rations + greenhouse_food
-        storm_tag = f" | 🌪️ STORM ({state.mars_env.dust_storm_days_remaining}d left)" if state.mars_env.dust_storm_active else ""
-        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f}) | Water: {state.resources.water_liters:.0f} L{storm_tag}")
+        storm_tag = f" | 🌪️ STORM ({state.mars_env.dust_storm_days_remaining}d)" if state.mars_env.dust_storm_active else ""
+        water_tag = f" | 💧 PUMP FAIL ({state.mars_env.water_failure_days_remaining}d)" if state.mars_env.water_failure_active else ""
+        flare_tag = f" | ☀️ FLARE ({state.mars_env.solar_flare_days_remaining}d)" if state.mars_env.solar_flare_active else ""
+        meteor_tag = " | ☄️ METEORITE HIT" if state.mars_env.meteorite_struck else ""
+        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f}) | Water: {state.resources.water_liters:.0f} L{storm_tag}{water_tag}{flare_tag}{meteor_tag}")
         time.sleep(tick_delay)
     print("Simulation complete.")
 
