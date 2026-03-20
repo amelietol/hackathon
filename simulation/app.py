@@ -51,7 +51,7 @@ st.title("🚀 Mars Base — Day Survival Simulation")
 ctrl      = read_control()
 is_paused = ctrl.get("paused", False)
 
-c1, c2, _ = st.columns([1, 1, 6])
+c1, c2, c3, _ = st.columns([1, 1, 1.5, 4.5])
 with c1:
     if is_paused:
         if st.button("▶️ Resume"):
@@ -62,11 +62,33 @@ with c1:
 with c2:
     if st.button("🔄 Restart"):
         write_control(paused=False, reset=True); st.rerun()
+with c3:
+    state_peek = load_state()
+    storm_active = state_peek.mars_env.dust_storm_active if hasattr(state_peek, 'mars_env') and state_peek.mars_env else False
+    if storm_active:
+        st.button("🌪️ Storm Active", disabled=True)
+    else:
+        if st.button("🌪️ Dust Storm"):
+            write_control(paused=False, trigger_storm=True); st.rerun()
 
 st.caption(f"{'⏸ Paused' if is_paused else '▶ Running'}")
 
 state = load_state()
 st.subheader(f"📅 Day {state.day} / 450")
+
+# Dust storm warning banner
+if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.dust_storm_active:
+    env = state.mars_env
+    temp_now = env.effective_greenhouse_temp()
+    temp_drop = env.greenhouse_temp_c - temp_now
+    st.error(
+        f"🌪️ DUST STORM IN PROGRESS — {env.dust_storm_days_remaining} days remaining\n\n"
+        f"Severity: {env.dust_storm_severity*100:.0f}% · "
+        f"Greenhouse temp dropped from {env.greenhouse_temp_c:.0f}°C → {temp_now:.0f}°C (−{temp_drop:.0f}°C) · "
+        f"Light: {env.effective_par():.0f} µmol/m²/s (normal: 450) · "
+        f"Water recycling: {env.water_recycling_efficiency()*100:.0f}% (normal: 90%) · "
+        f"Growth rate: {env.growth_modifier()*100:.0f}% (normal: 91%)"
+    )
 
 st.markdown("### 👨‍🚀 Astronauts")
 cols = st.columns(4)
@@ -129,25 +151,28 @@ st.markdown("---")
 st.markdown("### 🌱 Greenhouse")
 stage_icon = {"seedling":"🔴","vegetative":"🟡","mature":"🟢","wilting":"🟤"}
 
-plant_cols = st.columns(len(state.plants))
-for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
-    with col:
-        stage = plant.get_growth_stage()
-        st.markdown(f"**{plant.name}** {stage_icon.get(stage,'⚪')}")
-        st.caption(f"Day {plant.days_planted}/{plant.growth_cycle_days} · {stage.capitalize()}")
-        st.caption(f"{plant.area_m2} m²")
-        st.markdown("Hydration")
-        st.progress(plant.hydration / 100.0)
-        st.caption(f"{plant.hydration:.1f}%")
+if len(state.plants) == 0:
+    st.caption("No crops planted yet.")
+else:
+    plant_cols = st.columns(len(state.plants))
+    for idx, (col, plant) in enumerate(zip(plant_cols, state.plants)):
+        with col:
+            stage = plant.get_growth_stage()
+            st.markdown(f"**{plant.name}** {stage_icon.get(stage,'⚪')}")
+            st.caption(f"Day {plant.days_planted}/{plant.growth_cycle_days} · {stage.capitalize()}")
+            st.caption(f"{plant.area_m2} m²")
+            st.markdown("Hydration")
+            st.progress(plant.hydration / 100.0)
+            st.caption(f"{plant.hydration:.1f}%")
 
-        if plant.is_harvestable():
-            kg = plant.harvest_kg()
-            if st.button(f"🌾 Harvest (~{kg:.1f} kg)", key=f"harvest_{idx}"):
-                current = getattr(state.inventory, plant.name, 0.0)
-                setattr(state.inventory, plant.name, round(current + kg, 3))
-                plant.days_planted = 0
-                save_state(state)
-                st.rerun()
+            if plant.is_harvestable():
+                kg = plant.harvest_kg()
+                if st.button(f"🌾 Harvest (~{kg:.1f} kg)", key=f"harvest_{idx}"):
+                    current = getattr(state.inventory, plant.name, 0.0)
+                    setattr(state.inventory, plant.name, round(current + kg, 3))
+                    plant.days_planted = 0
+                    save_state(state)
+                    st.rerun()
 
 st.markdown("---")
 
@@ -161,20 +186,31 @@ st.markdown("---")
 
 st.markdown("### 🔴 Mars Environment")
 env = state.mars_env
+actual_temp = env.effective_greenhouse_temp()
+actual_par = env.effective_par()
+
 mc1, mc2, mc3, mc4 = st.columns(4)
 with mc1: st.metric("🌡 External Temp",    f"{env.external_temp_c}°C")
-with mc2: st.metric("🏠 Greenhouse Temp",  f"{env.greenhouse_temp_c}°C")
+with mc2:
+    temp_delta = actual_temp - env.greenhouse_temp_c
+    st.metric("🏠 Greenhouse Temp",  f"{actual_temp:.0f}°C",
+              delta=f"{temp_delta:+.0f}°C" if temp_delta != 0 else "nominal")
 with mc3: st.metric("☀️ Solar Irradiance",  f"{env.solar_irradiance_wm2:.0f} W/m²",
                      delta=f"{(env.solar_irradiance_wm2/1361*100):.0f}% of Earth")
-with mc4: st.metric("💡 Effective PAR",     f"{env.effective_par():.0f} µmol/m²/s")
+with mc4:
+    par_status = "⚠️ reduced" if actual_par < 400 else "nominal"
+    st.metric("💡 Effective PAR",     f"{actual_par:.0f} µmol/m²/s",
+              delta=par_status)
 
 mc5, mc6, mc7, mc8 = st.columns(4)
 with mc5: st.metric("🪨 Gravity",          f"{env.gravity_factor*100:.0f}% Earth",
                      delta=f"{env.gravity_ms2:.2f} m/s²")
 with mc6: st.metric("☢️ Radiation (inside)", f"{env.effective_radiation():.2f} mSv/day")
 with mc7: st.metric("🫁 CO₂ (greenhouse)",  f"{env.greenhouse_co2_ppm:.0f} ppm")
-with mc8: st.metric("🏭 Pressure (ext.)",   f"{env.external_pressure_mbar:.1f} mbar",
-                     delta=f"{(env.external_pressure_mbar/1013*100):.1f}% of Earth")
+with mc8:
+    recycling = env.water_recycling_efficiency()
+    st.metric("♻️ Water Recycling",   f"{recycling*100:.0f}%",
+              delta=f"{(recycling - 0.9)*100:+.0f}%" if recycling != 0.9 else "nominal")
 
 time.sleep(1)
 st.rerun()

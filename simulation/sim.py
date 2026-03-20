@@ -28,7 +28,7 @@ DAILY_POTASSIUM_MG    = 4700.0
 
 @dataclass
 class MarsEnvironment:
-    """Static Martian conditions — no events, just the baseline reality."""
+    """Martian conditions including dust storm support."""
     # Atmosphere
     external_pressure_mbar: float = 6.5         # Mars surface: 6-7 mbar
     greenhouse_pressure_mbar: float = 1013.0    # Earth-like pressurized interior
@@ -51,31 +51,79 @@ class MarsEnvironment:
     gravity_ms2: float = 3.721                  # 38% of Earth (9.81 m/s²)
     gravity_factor: float = 0.38
 
+    # Dust storm state
+    dust_storm_active: bool = False
+    dust_storm_days_remaining: int = 0
+    dust_storm_severity: float = 0.0            # 0 = none, 0.6 = medium
+
     def effective_par(self) -> float:
-        """Total PAR available inside greenhouse (µmol/m²/s)."""
-        # Mars solar contributes ~250 µmol/m²/s at equator noon (43% of Earth)
+        """Total PAR inside greenhouse. Storm blocks sunlight, LEDs partially compensate."""
         solar_par = 250.0 * (self.solar_irradiance_wm2 / 590.0)
-        return min(500.0, solar_par + self.led_supplement_par)
+        if self.dust_storm_active:
+            # Storm blocks most sunlight; LEDs run at reduced capacity (less power available)
+            solar_par *= (1.0 - self.dust_storm_severity)
+            led_par = self.led_supplement_par * (1.0 - self.dust_storm_severity * 0.4)
+        else:
+            led_par = self.led_supplement_par
+        return max(50.0, min(500.0, solar_par + led_par))
 
     def effective_radiation(self) -> float:
         """Radiation dose reaching inside greenhouse (mSv/day)."""
         return self.radiation_msv_per_day * (1.0 - self.greenhouse_shielding)
 
+    def effective_greenhouse_temp(self) -> float:
+        """Greenhouse temp drops during storms (less solar heating, more energy to heating)."""
+        if self.dust_storm_active:
+            # Temp drops 5-15°C depending on severity — heating can't fully compensate
+            return self.greenhouse_temp_c - self.dust_storm_severity * 20.0
+        return self.greenhouse_temp_c
+
+    def water_recycling_efficiency(self) -> float:
+        """Normally 90%. Storm reduces power → pumps run slower → efficiency drops."""
+        if self.dust_storm_active:
+            return 0.90 - self.dust_storm_severity * 0.25  # 0.75 at severity 0.6
+        return 0.90
+
     def growth_modifier(self) -> float:
-        """Combined modifier on plant growth from Mars conditions.
-        Gravity: ~91% efficiency (plants grow slightly slower in 0.38g).
-        CO2: optimal at 800-1200 ppm (bonus), reduced below 400 ppm.
-        """
+        """Combined modifier on plant growth from Mars conditions + storm effects."""
         # Gravity effect: 0.85 + gravity_factor * 0.15 → 0.907 on Mars
         grav_mod = 0.85 + self.gravity_factor * 0.15
         # CO2 effect
         if self.greenhouse_co2_ppm < 400:
             co2_mod = 0.70
         elif self.greenhouse_co2_ppm <= 1200:
-            co2_mod = 1.0  # Optimal range
+            co2_mod = 1.0
         else:
-            co2_mod = 0.95  # Slightly too high
-        return grav_mod * co2_mod
+            co2_mod = 0.95
+        # PAR effect: below 200 µmol/m²/s plants grow slower
+        par = self.effective_par()
+        if par < 200:
+            light_mod = 0.5 + (par / 200.0) * 0.5  # Linear from 0.5 to 1.0
+        else:
+            light_mod = 1.0
+        # Cold stress during storm
+        temp = self.effective_greenhouse_temp()
+        if temp < 15.0:
+            temp_mod = 0.6 + (temp / 15.0) * 0.4  # Linear from 0.6 to 1.0
+        else:
+            temp_mod = 1.0
+        return grav_mod * co2_mod * light_mod * temp_mod
+
+    def trigger_dust_storm(self, severity: float = 0.6, duration_days: int = 12):
+        """Activate a dust storm. Severity 0.6 = medium-strong."""
+        self.dust_storm_active = True
+        self.dust_storm_severity = max(0.1, min(1.0, severity))
+        self.dust_storm_days_remaining = duration_days
+
+    def tick_storm(self):
+        """Advance storm by one day. Auto-resolves when days run out."""
+        if not self.dust_storm_active:
+            return
+        self.dust_storm_days_remaining -= 1
+        if self.dust_storm_days_remaining <= 0:
+            self.dust_storm_active = False
+            self.dust_storm_severity = 0.0
+            self.dust_storm_days_remaining = 0
 
 
 @dataclass
@@ -236,9 +284,11 @@ class Inventory:
         for a in astronauts:
             if not a.isAlive: continue
             share = remaining_kcal / n
-            if a.storedFoodCalories >= share:
-                a.storedFoodCalories -= share
-                nutrients["kcal"] += share
+            # Eat whatever emergency rations are available (even partial)
+            eaten = min(a.storedFoodCalories, share)
+            if eaten > 0:
+                a.storedFoodCalories -= eaten
+                nutrients["kcal"] += eaten
                 prot_share = min(a.storedFoodProteinG, a.dailyProteinNeedG)
                 a.storedFoodProteinG = max(0.0, a.storedFoodProteinG - prot_share)
                 nutrients["protein"] += prot_share
@@ -286,13 +336,18 @@ class SimState:
     def tick(self):
         self.day += 1
 
-        # ── Mars growth modifier (gravity + CO₂) ────────────────────────
-        growth_mod = self.mars_env.growth_modifier()  # ~0.907 nominal
-        effective_rad = self.mars_env.effective_radiation()  # mSv/day inside
+        # ── Mars growth modifier (gravity + CO₂ + light + temp) ──────────
+        growth_mod = self.mars_env.growth_modifier()
+        effective_rad = self.mars_env.effective_radiation()
+        is_storm = self.mars_env.dust_storm_active
 
         for plant in self.plants:
-            # Hydration drain slightly faster in low-g (altered transpiration)
-            plant.hydration = max(0.0, plant.hydration - 2.0 / growth_mod)
+            # Hydration drain — faster in low-g, worse during storms (cold stress)
+            base_drain = 2.0 / growth_mod
+            if is_storm:
+                # Cold + dry air during storm increases water loss
+                base_drain += self.mars_env.dust_storm_severity * 1.5
+            plant.hydration = max(0.0, plant.hydration - base_drain)
             # Radiation stress: minor hydration penalty
             plant.hydration = max(0.0, plant.hydration - effective_rad * 0.3)
             plant.days_planted += 1
@@ -308,7 +363,7 @@ class SimState:
         # Auto-harvest mature plants directly into inventory
         for plant in self.plants:
             if plant.is_harvestable():
-                # Mars conditions reduce yield slightly via growth_mod
+                # Mars conditions + storm reduce yield
                 kg = plant.harvest_kg() * growth_mod
                 current = getattr(self.inventory, plant.name, 0.0)
                 setattr(self.inventory, plant.name, round(current + kg, 3))
@@ -316,14 +371,17 @@ class SimState:
                 plant.hydration = 100.0
         
         per_astronaut = self.inventory.consume_for_astronauts(self.astronauts)
-        water_per = self.resources.water_liters / max(1, len([a for a in self.astronauts if a.isAlive]))
+        alive_list = [a for a in self.astronauts if a.isAlive]
+        water_per = self.resources.water_liters / max(1, len(alive_list))
+        recycling_eff = self.mars_env.water_recycling_efficiency()
+
         for a in self.astronauts:
             if not a.isAlive:
                 continue
             water_given = min(a.dailyWaterNeedL, water_per)
             self.resources.water_liters = max(0.0, self.resources.water_liters - water_given)
-            # Water recycling: 90% recovery via transpiration capture
-            self.resources.water_liters += water_given * 0.90
+            # Water recycling: efficiency depends on storm state
+            self.resources.water_liters += water_given * recycling_eff
             a.tick(
                 kcal_consumed      = per_astronaut.get("kcal", 0.0),
                 protein_consumed_g = per_astronaut.get("protein", 0.0),
@@ -335,13 +393,16 @@ class SimState:
                 potassium          = per_astronaut.get("potassium", 0.0),
             )
             # ── Mars gravity: accelerated bone loss (1.62× Earth rate) ───
-            gravity_bone_penalty = (2.0 - self.mars_env.gravity_factor)  # ~1.62
+            gravity_bone_penalty = (2.0 - self.mars_env.gravity_factor)
             a.boneHealthScore = max(0.0, a.boneHealthScore - 0.0003 * gravity_bone_penalty)
             # ── Mars radiation: slow immune degradation ──────────────────
             a.immuneScore = max(0.0, a.immuneScore - effective_rad * 0.0005)
             # ── High CO₂ cognitive effect (>1500 ppm) ────────────────────
             if self.mars_env.greenhouse_co2_ppm > 1500:
                 a.cognitivePerformance = max(0.0, a.cognitivePerformance - 0.001)
+
+        # ── Advance dust storm timer (at end so effects apply on last day) ─
+        self.mars_env.tick_storm()
     
     def plant_crop(self, crop_name: str, area_m2: float) -> dict:
         """Plant a new crop. Returns success status."""
@@ -434,9 +495,9 @@ def read_control() -> dict:
         return json.load(f)
 
 
-def write_control(paused: bool, reset: bool = False):
+def write_control(paused: bool, reset: bool = False, trigger_storm: bool = False):
     with open(CONTROL_FILE, "w") as f:
-        json.dump({"paused": paused, "reset": reset}, f)
+        json.dump({"paused": paused, "reset": reset, "trigger_storm": trigger_storm}, f)
 
 
 def run(days: int = 450, tick_delay: float = 3.0):
@@ -482,13 +543,19 @@ def run(days: int = 450, tick_delay: float = 3.0):
         if ctrl.get("paused"):
             time.sleep(0.2)
             continue
+        # Check for dust storm trigger from frontend
+        if ctrl.get("trigger_storm") and not state.mars_env.dust_storm_active:
+            state.mars_env.trigger_dust_storm(severity=0.6, duration_days=12)
+            write_control(paused=False, trigger_storm=False)
+            print(f"🌪️ DUST STORM TRIGGERED! Severity: 60%, Duration: 12 days")
         state.tick()
         save_state(state)
         alive = sum(1 for a in state.astronauts if a.isAlive)
         total_emergency_rations = sum(a.storedFoodCalories for a in state.astronauts if a.isAlive)
         greenhouse_food = state.inventory.total_kcal()
         total_food = total_emergency_rations + greenhouse_food
-        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f}) | Water: {state.resources.water_liters:.0f} L")
+        storm_tag = f" | 🌪️ STORM ({state.mars_env.dust_storm_days_remaining}d left)" if state.mars_env.dust_storm_active else ""
+        print(f"Day {state.day} | Alive: {alive}/4 | Food: {total_food:.0f} kcal (Emergency: {total_emergency_rations:.0f}, Greenhouse: {greenhouse_food:.0f}) | Water: {state.resources.water_liters:.0f} L{storm_tag}")
         time.sleep(tick_delay)
     print("Simulation complete.")
 
