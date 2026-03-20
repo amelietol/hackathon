@@ -68,6 +68,13 @@ class MarsEnvironment:
     solar_flare_active: bool = False
     solar_flare_days_remaining: int = 0
 
+    # Meteorite repair state
+    repair_active: bool = False
+    repair_days_remaining: int = 0
+    repair_astronaut_id: str = ""               # ID of astronaut doing EVA repair
+    repair_area_target: float = 450.0           # Growing area to restore to
+    repair_destroyed_plants: str = ""           # JSON list of destroyed plant specs for replanting
+
     def effective_par(self) -> float:
         """Total PAR inside greenhouse. Storm blocks sunlight, LEDs partially compensate."""
         solar_par = 250.0 * (self.solar_irradiance_wm2 / 590.0)
@@ -159,7 +166,7 @@ class MarsEnvironment:
             self.dust_storm_severity = 0.0
             self.dust_storm_days_remaining = 0
 
-    def tick_events(self):
+    def tick_events(self, resources=None, sim_state=None):
         """Advance all non-storm event timers."""
         if self.water_failure_active:
             self.water_failure_days_remaining -= 1
@@ -171,6 +178,31 @@ class MarsEnvironment:
             if self.solar_flare_days_remaining <= 0:
                 self.solar_flare_active = False
                 self.solar_flare_days_remaining = 0
+        # Repair: restore 5 m²/day
+        if self.repair_active and resources is not None:
+            resources.growing_area_m2 = min(self.repair_area_target, resources.growing_area_m2 + 5.0)
+            self.repair_days_remaining -= 1
+            if self.repair_days_remaining <= 0 or resources.growing_area_m2 >= self.repair_area_target:
+                # Replant destroyed crops
+                if sim_state is not None and self.repair_destroyed_plants:
+                    import json as _json
+                    try:
+                        specs = _json.loads(self.repair_destroyed_plants)
+                        for spec in specs:
+                            new_plant = Plant(
+                                name=spec["name"],
+                                area_m2=spec["area_m2"],
+                                growth_cycle_days=spec["growth_cycle_days"],
+                                hydration=100.0,
+                                days_planted=0
+                            )
+                            sim_state.plants.append(new_plant)
+                    except:
+                        pass
+                self.repair_active = False
+                self.repair_days_remaining = 0
+                self.repair_astronaut_id = ""
+                self.repair_destroyed_plants = ""
         # Meteorite is one-shot, cleared after processing in tick()
         self.meteorite_struck = False
         self.meteorite_area_lost = 0.0
@@ -369,10 +401,10 @@ class SimState:
     def __post_init__(self):
         if self.astronauts is None:
             self.astronauts = [
-                Astronaut(id="a1", name="Alex"),
-                Astronaut(id="a2", name="Jordan"),
-                Astronaut(id="a3", name="Sam"),
-                Astronaut(id="a4", name="Riley"),
+                Astronaut(id="a1", name="Amelie"),
+                Astronaut(id="a2", name="Jessica"),
+                Astronaut(id="a3", name="Amadine"),
+                Astronaut(id="a4", name="Max"),
             ]
         if self.plants is None:
             self.plants = []
@@ -454,6 +486,8 @@ class SimState:
         # ── Meteorite strike: destroy plants + reduce growing area ─────────
         if self.mars_env.meteorite_struck:
             area_to_destroy = self.mars_env.meteorite_area_lost
+            # Remember target for repair
+            area_before = self.resources.growing_area_m2
             self.resources.growing_area_m2 = max(50.0, self.resources.growing_area_m2 - area_to_destroy)
             # Kill plants in the destroyed area (remove from end)
             destroyed_area = 0.0
@@ -465,6 +499,30 @@ class SimState:
                 destroyed_plants.append(p)
             for p in destroyed_plants:
                 self.plants.remove(p)
+            # Auto-assign healthiest astronaut to repair duty
+            repair_candidates = [a for a in self.astronauts if a.isAlive]
+            if repair_candidates:
+                best = max(repair_candidates, key=lambda a: a.micronutrientScore + a.hydrationLevel)
+                repair_days = max(1, int(area_to_destroy / 5.0))  # 5 m²/day
+                self.mars_env.repair_active = True
+                self.mars_env.repair_days_remaining = repair_days
+                self.mars_env.repair_astronaut_id = best.id
+                self.mars_env.repair_area_target = area_before
+                # Save destroyed plants for replanting after repair
+                import json as _json
+                destroyed_specs = [{"name": p.name, "area_m2": p.area_m2, "growth_cycle_days": p.growth_cycle_days} for p in destroyed_plants]
+                self.mars_env.repair_destroyed_plants = _json.dumps(destroyed_specs)
+
+        # ── Repair penalties: repairing astronaut works harder ───────────
+        if self.mars_env.repair_active:
+            for a in self.astronauts:
+                if a.id == self.mars_env.repair_astronaut_id and a.isAlive:
+                    # EVA repair = 50% more calorie burn (adds 1500 kcal deficit)
+                    a.calorieDeficitAccumulated += 1500.0
+                    # Physical strain: hydration and bone penalties
+                    a.hydrationLevel = max(0.0, a.hydrationLevel - 0.02)
+                    a.boneHealthScore = max(0.0, a.boneHealthScore - 0.001)
+                    break
 
         # ── Solar flare: extra radiation damage to astronauts ────────────
         if self.mars_env.solar_flare_active:
@@ -477,7 +535,7 @@ class SimState:
 
         # ── Advance event timers (at end so effects apply on last day) ───
         self.mars_env.tick_storm()
-        self.mars_env.tick_events()
+        self.mars_env.tick_events(resources=self.resources, sim_state=self)
     
     def plant_crop(self, crop_name: str, area_m2: float) -> dict:
         """Plant a new crop. Returns success status."""
@@ -540,8 +598,14 @@ def save_state(state: SimState):
 def load_state() -> SimState:
     if not os.path.exists(STATE_FILE):
         return SimState()
-    with open(STATE_FILE) as f:
-        data = json.load(f)
+    try:
+        with open(STATE_FILE) as f:
+            content = f.read()
+        if not content.strip():
+            return SimState()
+        data = json.loads(content)
+    except (json.JSONDecodeError, IOError):
+        return SimState()
     state = SimState(day=data["day"])
     state.astronauts = [Astronaut(**a) for a in data["astronauts"]]
     # Load plants - handle both old and new format
