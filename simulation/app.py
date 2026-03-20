@@ -46,6 +46,20 @@ def set_background(image_path):
 
 set_background("hg.jpeg")
 
+# Make buttons transparent with grey border
+st.markdown("""
+    <style>
+    button {
+        background-color: transparent !important;
+        border: 2px solid #808080 !important;
+    }
+    button:hover {
+        background-color: rgba(128, 128, 128, 0.2) !important;
+        border: 2px solid #a0a0a0 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("Mars Base — Day Survival Simulation")
 
 ctrl      = read_control()
