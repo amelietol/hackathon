@@ -1,9 +1,42 @@
 import time
 import base64
+import os
 import streamlit as st
 from sim import (load_state, save_state, read_control, write_control,
                  SPECIES_KCAL_PER_100G, DAILY_CALORIE_NEED, SimState)
 from resource_optimizer import calculate_optimal_watering, calculate_harvest_priority
+
+# AI Agent setup
+MCP_URL = "https://kb-start-hack-gateway-buyjtibfpg.gateway.bedrock-agentcore.us-east-2.amazonaws.com/mcp"
+MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
+# Initialize AI agent (cached to avoid recreating on every rerun)
+@st.cache_resource
+def get_ai_agent():
+    """Initialize Claude Haiku agent with MCP knowledge base."""
+    try:
+        from strands import Agent
+        from strands.tools.mcp import MCPClient
+        from mcp.client.streamable_http import streamablehttp_client
+        
+        mcp_client = MCPClient(lambda: streamablehttp_client(MCP_URL))
+        mcp_tools = mcp_client.list_tools_sync()
+        
+        agent = Agent(
+            model=MODEL,
+            tools=mcp_tools,
+            system_prompt=(
+                "You are the Mars Greenhouse AI managing a life-critical system. "
+                "Analyze simulation data and provide brief, actionable recommendations. "
+                "Keep responses under 2 sentences for real-time display."
+            ),
+        )
+        return agent, mcp_client
+    except Exception as e:
+        st.warning(f"AI agent unavailable: {e}")
+        return None, None
+
+agent, mcp_client = get_ai_agent()
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
@@ -402,6 +435,7 @@ for p in state.plants:
 
 # Get AI recommendations
 if len(plants_data) > 0:
+    # Rule-based recommendations
     watering_plans = calculate_optimal_watering(plants_data, state.resources.water_liters)
     
     # Show top 3 watering recommendations
@@ -422,6 +456,20 @@ if len(plants_data) > 0:
         for plant_name, priority, reason in harvest_priorities[:3]:
             priority_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🟢"
             st.caption(f"{priority_icon} {plant_name}: {reason}")
+    
+    # Claude AI Analysis (only on critical days or every 20 days)
+    if agent and mcp_client and (days_of_food < 10 or state.day % 20 == 0):
+        with st.expander("🧠 Claude AI Analysis", expanded=(days_of_food < 10)):
+            with st.spinner("Consulting AI..."):
+                try:
+                    # Brief prompt for fast response
+                    prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
+                    
+                    with mcp_client:
+                        response = agent(prompt)
+                        st.info(str(response)[:300])  # Limit to 300 chars
+                except Exception as e:
+                    st.caption(f"AI temporarily unavailable")
 else:
     st.caption("No crops planted yet")
 
