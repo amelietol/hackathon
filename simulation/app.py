@@ -37,22 +37,6 @@ agent = simple_ai_agent  # Use simple agent instead of Bedrock
 
 st.set_page_config(page_title="Mars Base Simulation", layout="wide")
 
-# Agent activity log (stored in session state)
-if 'agent_log' not in st.session_state:
-    st.session_state.agent_log = []
-
-def log_agent_activity(day: int, activity_type: str, message: str):
-    """Log agent activity for monitoring."""
-    st.session_state.agent_log.append({
-        'day': day,
-        'type': activity_type,
-        'message': message,
-        'timestamp': time.time()
-    })
-    # Keep only last 20 entries
-    if len(st.session_state.agent_log) > 20:
-        st.session_state.agent_log = st.session_state.agent_log[-20:]
-
 # Set background image
 def set_background(image_path):
     try:
@@ -186,38 +170,6 @@ if state.day == 0 and len(state.plants) == 0:
     save_state(state)
 
 st.subheader(f"Day {state.day} / 450")
-
-# Agent Monitor (collapsible)
-with st.expander("🤖 Agent Monitor - Real-time AI decision tracking", expanded=False):
-    if len(st.session_state.agent_log) > 0:
-        st.markdown("### Recent Activity")
-        cols_monitor = st.columns(2)
-        for idx, entry in enumerate(reversed(st.session_state.agent_log[-10:])):
-            col = cols_monitor[idx % 2]
-            with col:
-                icon = {
-                    'ai_analysis': '🧠',
-                    'watering': '💧',
-                    'harvest': '🌾',
-                    'alert': '⚠️',
-                    'status': '✅'
-                }.get(entry['type'], '📝')
-                
-                st.markdown(f"**Day {entry['day']}** {icon}")
-                st.caption(entry['message'])
-                st.markdown("---")
-        
-        # Agent stats
-        st.markdown("### Agent Stats")
-        stat_cols = st.columns(2)
-        ai_count = sum(1 for e in st.session_state.agent_log if e['type'] == 'ai_analysis')
-        action_count = sum(1 for e in st.session_state.agent_log if e['type'] in ['watering', 'harvest'])
-        with stat_cols[0]:
-            st.metric("AI Consultations", ai_count)
-        with stat_cols[1]:
-            st.metric("Actions Taken", action_count)
-    else:
-        st.caption("No agent activity yet")
 
 # Dust storm warning banner
 if hasattr(state, 'mars_env') and state.mars_env and state.mars_env.dust_storm_active:
@@ -535,77 +487,6 @@ if not is_paused:
         state.tick()
         save_state(state)
         st.session_state.has_ticked = True
-        
-        # Log status updates every 10 days
-        if state.day % 10 == 0:
-            alive = sum(1 for a in state.astronauts if a.isAlive)
-            log_agent_activity(state.day, 'status', f"{alive}/4 alive, {state.inventory.total_kcal():.0f} kcal, {state.resources.water_liters:.0f}L water")
-        
-        # Run AI agent analysis on critical days or every 20 days
-        if agent and len(state.plants) > 0:
-            # Prevent concurrent agent calls and track last analysis day
-            if 'agent_busy' not in st.session_state:
-                st.session_state.agent_busy = False
-            if 'last_agent_day' not in st.session_state:
-                st.session_state.last_agent_day = -1
-            
-            # Only run if not busy and haven't analyzed this day yet
-            if not st.session_state.agent_busy and st.session_state.last_agent_day != state.day:
-                total_food = state.inventory.total_kcal()
-                alive_count = sum(1 for a in state.astronauts if a.isAlive)
-                days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
-                
-                # Run AI on critical situations or every 20 days
-                if days_of_food < 10 or state.day % 20 == 0:
-                    try:
-                        st.session_state.agent_busy = True
-                        st.session_state.last_agent_day = state.day
-                        
-                        # Call simple rule-based agent
-                        response_text = agent(
-                            day=state.day,
-                            alive_count=alive_count,
-                            total_food=total_food,
-                            water_liters=state.resources.water_liters,
-                            plants=state.plants
-                        )
-                        
-                        # Log AI activity
-                        log_agent_activity(state.day, 'ai_analysis', response_text)
-                    except Exception as e:
-                        # Log error
-                        error_msg = str(e)
-                        if "already processing" not in error_msg:
-                            log_agent_activity(state.day, 'alert', f"AI error: {str(e)[:100]}")
-                    finally:
-                        st.session_state.agent_busy = False
-        
-        # Log watering and harvest recommendations
-        if len(state.plants) > 0:
-            plants_data = []
-            for p in state.plants:
-                plants_data.append({
-                    'name': p.name,
-                    'area_m2': p.area_m2,
-                    'hydration': p.hydration,
-                    'days_planted': p.days_planted,
-                    'growth_cycle': p.growth_cycle_days,
-                    'stage': p.get_growth_stage(),
-                    'harvestable': p.is_harvestable(),
-                    'expected_yield_kg': p.harvest_kg() if p.is_harvestable() else 0
-                })
-            
-            # Check watering needs
-            watering_plans = calculate_optimal_watering(plants_data, state.resources.water_liters)
-            if watering_plans and watering_plans[0].priority == 1:
-                log_agent_activity(state.day, 'watering', f"Critical: {watering_plans[0].plant_name} needs {watering_plans[0].water_amount_liters:.1f}L")
-            
-            # Check harvest needs
-            shortage_severity = max(0.0, min(1.0, 1.0 - (days_of_food / 30.0)))
-            
-            harvest_priorities = calculate_harvest_priority(plants_data, shortage_severity)
-            if harvest_priorities and harvest_priorities[0][1] == 1:
-                log_agent_activity(state.day, 'harvest', f"Urgent: Harvest {harvest_priorities[0][0]} - {harvest_priorities[0][2]}")
     
     # Wait 3 seconds before next tick
     time.sleep(3)
