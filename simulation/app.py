@@ -44,7 +44,7 @@ def set_background(image_path):
     except FileNotFoundError:
         st.warning("Background image not found. Using default background.")
 
-set_background("hg.jpeg")
+set_background("simulation/hg.jpeg")
 
 # Make buttons transparent with grey border
 st.markdown("""
@@ -192,7 +192,7 @@ for idx, (col, a) in enumerate(zip(cols, state.astronauts)):
                 }
                 </style>
             """, unsafe_allow_html=True)
-            st.image("astronaut.png", use_container_width=True)
+            st.image("simulation/astronaut.png", use_container_width=True)
         except:
             pass
         
@@ -266,27 +266,27 @@ else:
             # Display plant image if available
             if plant.name == "Potato":
                 try:
-                    st.image("potato.png", use_container_width=True)
+                    st.image("simulation/potato.png", use_container_width=True)
                 except:
                     pass
             elif plant.name == "Beans":
                 try:
-                    st.image("beans.png", use_container_width=True)
+                    st.image("simulation/beans.png", use_container_width=True)
                 except:
                     pass
             elif plant.name == "Lettuce":
                 try:
-                    st.image("lettuce.png", use_container_width=True)
+                    st.image("simulation/lettuce.png", use_container_width=True)
                 except:
                     pass
             elif plant.name == "Radish":
                 try:
-                    st.image("radish.png", use_container_width=True)
+                    st.image("simulation/radish.png", use_container_width=True)
                 except:
                     pass
             elif plant.name == "Herbs":
                 try:
-                    st.image("herbs.png", use_container_width=True)
+                    st.image("simulation/herbs.png", use_container_width=True)
                 except:
                     pass
             
