@@ -67,12 +67,12 @@ is_paused = ctrl.get("paused", False)
 
 c1, c2, c3, c4, c5, c6, _ = st.columns([1, 1, 1.5, 1.5, 1.5, 1.5, 1])
 with c1:
-    if is_paused:
-        if st.button("Resume"):
-            write_control(paused=False); st.rerun()
-    else:
-        if st.button("Pause"):
-            write_control(paused=True); st.rerun()
+        if is_paused:
+            if st.button("Resume"):
+                write_control(paused=False); st.rerun()
+        else:
+            if st.button("Pause"):
+                write_control(paused=True); st.rerun()
 with c2:
     if st.button("Restart"):
         # Reset simulation state directly
@@ -445,6 +445,8 @@ if not is_paused:
     # Run one simulation tick
     state.tick()
     save_state(state)
+    
+    # Wait 3 seconds before next tick
+    time.sleep(3)
 
-time.sleep(1)
 st.rerun()
