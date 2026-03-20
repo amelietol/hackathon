@@ -558,26 +558,39 @@ if not is_paused:
         
         # Run AI agent analysis on critical days or every 20 days
         if agent and len(state.plants) > 0:
-            total_food = state.inventory.total_kcal()
-            alive_count = sum(1 for a in state.astronauts if a.isAlive)
-            days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+            # Prevent concurrent agent calls and track last analysis day
+            if 'agent_busy' not in st.session_state:
+                st.session_state.agent_busy = False
+            if 'last_agent_day' not in st.session_state:
+                st.session_state.last_agent_day = -1
             
-            # Run AI on critical situations or every 20 days
-            if days_of_food < 10 or state.day % 20 == 0:
-                try:
-                    # Brief prompt for fast response
-                    prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
-                    
-                    response = agent(prompt)
-                    response_text = str(response)[:200]
-                    
-                    # Log AI activity
-                    log_agent_activity(state.day, 'ai_analysis', response_text)
-                except Exception as e:
-                    # Don't log AWS credential errors repeatedly
-                    error_msg = str(e)
-                    if "AccessDenied" not in error_msg or state.day % 50 == 0:
-                        log_agent_activity(state.day, 'alert', f"AI error: {str(e)[:100]}")
+            # Only run if not busy and haven't analyzed this day yet
+            if not st.session_state.agent_busy and st.session_state.last_agent_day != state.day:
+                total_food = state.inventory.total_kcal()
+                alive_count = sum(1 for a in state.astronauts if a.isAlive)
+                days_of_food = total_food / (DAILY_CALORIE_NEED * alive_count) if alive_count > 0 and total_food > 0 else 0
+                
+                # Run AI on critical situations or every 20 days
+                if days_of_food < 10 or state.day % 20 == 0:
+                    try:
+                        st.session_state.agent_busy = True
+                        st.session_state.last_agent_day = state.day
+                        
+                        # Brief prompt for fast response
+                        prompt = f"Day {state.day}: {alive_count}/4 alive, {total_food:.0f} kcal food, {state.resources.water_liters:.0f}L water. Brief status?"
+                        
+                        response = agent(prompt)
+                        response_text = str(response)[:200]
+                        
+                        # Log AI activity
+                        log_agent_activity(state.day, 'ai_analysis', response_text)
+                    except Exception as e:
+                        # Log error
+                        error_msg = str(e)
+                        if "already processing" not in error_msg:
+                            log_agent_activity(state.day, 'alert', f"AI error: {str(e)[:100]}")
+                    finally:
+                        st.session_state.agent_busy = False
         
         # Log watering and harvest recommendations
         if len(state.plants) > 0:
